@@ -10,6 +10,7 @@ ifeq ($(CONFIG_LRNG),y)
 else
   obj-y				+= random.o
 endif
+obj-$(CONFIG_LRNG_DRBG)		+= lrng_drbg.o
 
 obj-$(CONFIG_TTY_PRINTK)	+= ttyprintk.o
 obj-y				+= misc.o
