@@ -998,14 +998,13 @@ static struct fib6_node* fib6_backtrack(struct fib6_node *fn,
 	}
 }
 
-static bool ip6_hold_safe(struct net *net, struct rt6_info **prt,
-			  bool null_fallback)
+static bool ip6_hold_safe(struct net *net, struct rt6_info **prt)
 {
 	struct rt6_info *rt = *prt;
 
 	if (dst_hold_safe(&rt->dst))
 		return true;
-	if (null_fallback) {
+	if (net) {
 		rt = net->ipv6.ip6_null_entry;
 		dst_hold(&rt->dst);
 	} else {
@@ -1081,7 +1080,7 @@ restart:
 	/* Search through exception table */
 	rt = rt6_find_cached_rt(&res, &fl6->daddr, &fl6->saddr);
 	if (rt) {
-		if (ip6_hold_safe(net, &rt, true))
+		if (ip6_hold_safe(net, &rt))
 			dst_use_noref(&rt->dst, jiffies);
 	} else {
 		rt = ip6_create_rt_rcu(&res);
@@ -1227,7 +1226,7 @@ static struct rt6_info *rt6_get_pcpu_route(struct fib6_info *rt)
 	pcpu_rt = *p;
 
 	if (pcpu_rt)
-		ip6_hold_safe(NULL, &pcpu_rt, false);
+		ip6_hold_safe(NULL, &pcpu_rt);
 
 	return pcpu_rt;
 }
@@ -1865,7 +1864,7 @@ struct rt6_info *ip6_pol_route(struct net *net, struct fib6_table *table,
 	/*Search through exception table */
 	rt = rt6_find_cached_rt(&res, &fl6->daddr, &fl6->saddr);
 	if (rt) {
-		if (ip6_hold_safe(net, &rt, true))
+		if (ip6_hold_safe(net, &rt))
 			dst_use_noref(&rt->dst, jiffies);
 
 		rcu_read_unlock();
@@ -2509,7 +2508,7 @@ restart:
 	res.nh = &rt->fib6_nh;
 out:
 	if (ret)
-		ip6_hold_safe(net, &ret, true);
+		ip6_hold_safe(net, &ret);
 	else
 		ret = ip6_create_rt_rcu(&res);
 
