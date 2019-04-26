@@ -407,7 +407,7 @@ static int nft_tunnel_ip_dump(struct sk_buff *skb, struct ip_tunnel_info *info)
 	struct nlattr *nest;
 
 	if (info->mode & IP_TUNNEL_INFO_IPV6) {
-		nest = nla_nest_start(skb, NFTA_TUNNEL_KEY_IP6);
+		nest = nla_nest_start_noflag(skb, NFTA_TUNNEL_KEY_IP6);
 		if (!nest)
 			return -1;
 
@@ -418,7 +418,7 @@ static int nft_tunnel_ip_dump(struct sk_buff *skb, struct ip_tunnel_info *info)
 
 		nla_nest_end(skb, nest);
 	} else {
-		nest = nla_nest_start(skb, NFTA_TUNNEL_KEY_IP);
+		nest = nla_nest_start_noflag(skb, NFTA_TUNNEL_KEY_IP);
 		if (!nest)
 			return -1;
 
@@ -438,7 +438,7 @@ static int nft_tunnel_opts_dump(struct sk_buff *skb,
 	struct nft_tunnel_opts *opts = &priv->opts;
 	struct nlattr *nest;
 
-	nest = nla_nest_start(skb, NFTA_TUNNEL_KEY_OPTS);
+	nest = nla_nest_start_noflag(skb, NFTA_TUNNEL_KEY_OPTS);
 	if (!nest)
 		return -1;
 
