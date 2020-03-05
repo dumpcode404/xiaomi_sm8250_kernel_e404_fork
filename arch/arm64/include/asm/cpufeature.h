@@ -584,6 +584,10 @@ static inline bool cpu_has_hw_af(void)
 	return cpuid_feature_extract_unsigned_field(mmfr1,
 						ID_AA64MMFR1_HADBS_SHIFT);
 }
+#ifdef CONFIG_ARM64_AMU_EXTN
+/* Check whether the cpu supports the Activity Monitors Unit (AMU) */
+extern bool cpu_has_amu_feat(int cpu);
+#endif
 
 #endif /* __ASSEMBLY__ */
 
