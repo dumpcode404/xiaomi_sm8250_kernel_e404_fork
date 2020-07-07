@@ -462,7 +462,7 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		__SetPageLocked(new_page);
 		__SetPageSwapBacked(new_page);
 		err = __add_to_swap_cache(new_page, entry,
-					  gfp_mask & GFP_KERNEL, &shadow);
+					  gfp_mask & GFP_RECLAIM_MASK, &shadow);
 		if (likely(!err)) {
 			/* Initiate read into locked page */
 			if (!lru_gen_enabled())
