@@ -2952,5 +2952,8 @@ static inline void setup_nr_node_ids(void) {}
 
 extern int want_old_faultaround_pte;
 
+
+void mem_dump_obj(void *object);
+
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */
