@@ -123,11 +123,7 @@ static void panic_on_rcu_stall(unsigned long *gsp, unsigned long gp_seq)
 }
 
 /**
- * rcu_cpu_stall_reset - prevent further stall warnings in current grace period
- *
- * Set the stall-warning timeout way off into the future, thus preventing
- * any RCU CPU stall-warning messages from appearing in the current set of
- * RCU grace periods.
+ * rcu_cpu_stall_reset - restart stall-warning timeout for current grace period
  *
  * To perform the reset request from the caller, disable stall detection until
  * 3 fqs loops have passed. This is required to ensure a fresh jiffies is
