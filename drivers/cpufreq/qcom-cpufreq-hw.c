@@ -133,6 +133,7 @@ static const u16 cpufreq_qcom_epss_std_offsets[REG_ARRAY_SIZE] = {
 
 static struct cpufreq_counter qcom_cpufreq_counter[NR_CPUS];
 static struct cpufreq_qcom *qcom_freq_domain_map[NR_CPUS];
+static struct thermal_cooling_device *cdev[NR_CPUS];
 
 static unsigned int qcom_cpufreq_hw_get(unsigned int cpu);
 
@@ -435,7 +436,6 @@ static struct freq_attr *qcom_cpufreq_hw_attr[] = {
 
 static void qcom_cpufreq_ready(struct cpufreq_policy *policy)
 {
-	static struct thermal_cooling_device *cdev[NR_CPUS];
 	struct device_node *np;
 	unsigned int cpu = policy->cpu;
 
@@ -462,6 +462,82 @@ static void qcom_cpufreq_ready(struct cpufreq_policy *policy)
 	of_node_put(np);
 }
 
+static int qcom_cpufreq_exit(struct cpufreq_policy *policy)
+{
+	unsigned int cpu = policy->cpu;
+
+	if (!cdev[cpu])
+		return 0;
+
+	cpufreq_cooling_unregister(cdev[cpu]);
+
+	cdev[cpu] = NULL;
+
+	return 0;
+}
+
+static int qcom_cpufreq_hw_cpu_online(struct cpufreq_policy *policy)
+{
+	struct cpufreq_qcom *c = qcom_freq_domain_map[policy->cpu];
+
+	if (!c || c->dcvsh_irq <= 0)
+		return 0;
+
+	/*
+	 * Drain any LMh poll work that may still be queued from before the
+	 * offline path's cancel_delayed_work_sync() returned. With
+	 * cancel_throttle still asserted at this point, the drained work
+	 * item will bail out of qcom_lmh_dcvs_notify() via the cancel gate
+	 * and will not race the enable_irq() below.
+	 */
+	cancel_delayed_work_sync(&c->freq_poll_work);
+
+	mutex_lock(&c->dcvsh_lock);
+	c->cancel_throttle = false;
+	mutex_unlock(&c->dcvsh_lock);
+
+	irq_set_affinity_hint(c->dcvsh_irq, &c->related_cpus);
+
+	/*
+	 * The line will have been masked either by the offline path or by
+	 * an ISR that fired before the cluster shut down. Re-enable
+	 * conditionally to keep the disable/enable refcount balanced.
+	 */
+	if (irqd_irq_disabled(irq_get_irq_data(c->dcvsh_irq)))
+		enable_irq(c->dcvsh_irq);
+
+	return 0;
+}
+
+static int qcom_cpufreq_hw_cpu_offline(struct cpufreq_policy *policy)
+{
+	struct cpufreq_qcom *c = qcom_freq_domain_map[policy->cpu];
+
+	if (!c || c->dcvsh_irq <= 0)
+		return 0;
+
+	mutex_lock(&c->dcvsh_lock);
+	c->cancel_throttle = true;
+	mutex_unlock(&c->dcvsh_lock);
+
+	cancel_delayed_work_sync(&c->freq_poll_work);
+	irq_set_affinity_hint(c->dcvsh_irq, NULL);
+
+	/*
+	 * The ISR may have already masked the line via disable_irq_nosync().
+	 * Only disable here when it is still enabled so the depth refcount
+	 * stays balanced against the (conditional) enable_irq() inside
+	 * qcom_cpufreq_hw_cpu_online().
+	 */
+	if (!irqd_irq_disabled(irq_get_irq_data(c->dcvsh_irq)))
+		disable_irq(c->dcvsh_irq);
+
+	arch_update_thermal_pressure(&c->related_cpus, policy->cpuinfo.max_freq);
+	trace_dcvsh_throttle(cpumask_first(&c->related_cpus), 0);
+
+	return 0;
+}
+
 static struct cpufreq_driver cpufreq_qcom_hw_driver = {
 	.flags		= CPUFREQ_NEED_INITIAL_FREQ_CHECK |
 			  CPUFREQ_HAVE_GOVERNOR_PER_POLICY,
@@ -474,6 +550,9 @@ static struct cpufreq_driver cpufreq_qcom_hw_driver = {
 	.attr		= qcom_cpufreq_hw_attr,
 	.boost_enabled	= true,
 	.ready		= qcom_cpufreq_ready,
+	.online		= qcom_cpufreq_hw_cpu_online,
+	.offline	= qcom_cpufreq_hw_cpu_offline,
+	.exit		= qcom_cpufreq_exit,
 };
 
 static int cpuhp_qcom_online(unsigned int cpu)
