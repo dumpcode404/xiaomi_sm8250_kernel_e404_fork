@@ -73,6 +73,9 @@ struct rwsem_waiter {
 	struct task_struct *task;
 	enum rwsem_waiter_type type;
 	unsigned long timeout;
+
+	/* Writer only, not initialized in reader */
+	bool handoff_set;
 };
 #define rwsem_first_waiter(sem) \
 	list_first_entry(&sem->wait_list, struct rwsem_waiter, list)
@@ -118,9 +121,9 @@ struct rwsem_waiter {
  * atomic_long_cmpxchg() will be used to obtain writer lock.
  *
  * There are three places where the lock handoff bit may be set or cleared.
- * 1) rwsem_mark_wake() for readers.
- * 2) rwsem_try_write_lock() for writers.
- * 3) Error path of rwsem_down_write_slowpath().
+ * 1) rwsem_mark_wake() for readers		-- set, clear
+ * 2) rwsem_try_write_lock() for writers	-- set, clear
+ * 3) rwsem_del_waiter()			-- clear
  *
  * For all the above cases, wait_lock will be held. A writer must also
  * be the first one in the wait_list to be eligible for setting the handoff
@@ -261,9 +264,13 @@ static inline void rwsem_clear_reader_owned(struct rw_semaphore *sem)
 #define RWSEM_MAX_PREEMPT_ALLOWED 3000
 
 /*
- * Return true if current waiter is added in the front of the rwsem wait list.
+ * Add a waiter to the wait list in task priority order.
+ *
+ * The first waiter in the list is never displaced: it is the only one that may
+ * set RWSEM_FLAG_HANDOFF (see rwsem_try_write_lock()), so only waiters queued
+ * behind it can be overtaken by a higher priority task.
  */
-static inline bool rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
+static inline void rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
 				    struct rw_semaphore *sem)
 {
 	struct list_head *pos;
@@ -273,6 +280,7 @@ static inline bool rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
 	pos = head = &sem->wait_list;
 	/*
 	 * Rules for task prio aware rwsem wait list queueing:
+	 * 0:	Never preempt the first waiter in the list.
 	 * 1:	Only try to preempt waiters with which task priority
 	 *	which is higher than DEFAULT_PRIO.
 	 * 2:	To avoid starvation, add count to record
@@ -284,32 +292,30 @@ static inline bool rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
 	if (list_empty(head)) {
 		list_add_tail(&waiter_in->list, head);
 		sem->m_count = 0;
-		return true;
+		return;
 	}
 
 	if (waiter_in->task->prio < DEFAULT_PRIO
 		&& sem->m_count < RWSEM_MAX_PREEMPT_ALLOWED) {
 
-		list_for_each(pos, head) {
+		/* head->next is the first waiter, start looking behind it */
+		for (pos = head->next->next; pos != head; pos = pos->next) {
 			waiter = list_entry(pos, struct rwsem_waiter, list);
 			if (waiter->task->prio > waiter_in->task->prio) {
 				list_add(&waiter_in->list, pos->prev);
 				sem->m_count++;
-				return &waiter_in->list == head->next;
+				return;
 			}
 		}
 	}
 
 	list_add_tail(&waiter_in->list, head);
-
-	return false;
 }
 #else
-static inline bool rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
+static inline void rwsem_list_add_per_prio(struct rwsem_waiter *waiter_in,
 				    struct rw_semaphore *sem)
 {
 	list_add_tail(&waiter_in->list, &sem->wait_list);
-	return false;
 }
 #endif
 
@@ -431,12 +437,6 @@ enum rwsem_wake_type {
 	RWSEM_WAKE_READ_OWNED	/* Waker thread holds the read lock */
 };
 
-enum writer_wait_state {
-	WRITER_NOT_FIRST,	/* Writer is not first in wait list */
-	WRITER_FIRST,		/* Writer is first in wait list     */
-	WRITER_HANDOFF		/* Writer is first & handoff needed */
-};
-
 /*
  * The typical HZ value is either 250 or 1000. So set the minimum waiting
  * time to at least 4ms or 1 jiffy (if it is higher than 4ms) in the wait
@@ -452,6 +452,31 @@ enum writer_wait_state {
  */
 #define MAX_READERS_WAKEUP	0x100
 
+static inline void
+rwsem_add_waiter(struct rw_semaphore *sem, struct rwsem_waiter *waiter)
+{
+	lockdep_assert_held(&sem->wait_lock);
+	rwsem_list_add_per_prio(waiter, sem);
+	/* caller will set RWSEM_FLAG_WAITERS */
+}
+
+/*
+ * Remove a waiter from the wait_list and clear flags.
+ *
+ * Both rwsem_mark_wake() and rwsem_try_write_lock() contain a full 'copy' of
+ * this function. Modify with care.
+ */
+static inline void
+rwsem_del_waiter(struct rw_semaphore *sem, struct rwsem_waiter *waiter)
+{
+	lockdep_assert_held(&sem->wait_lock);
+	list_del(&waiter->list);
+	if (likely(!list_empty(&sem->wait_list)))
+		return;
+
+	atomic_long_andnot(RWSEM_FLAG_HANDOFF | RWSEM_FLAG_WAITERS, &sem->count);
+}
+
 /*
  * handle the lock release when processes blocked on it that can now run
  * - if we come here from up_xxxx(), then the RWSEM_FLAG_WAITERS bit must
@@ -463,6 +488,8 @@ enum writer_wait_state {
  *   preferably when the wait_lock is released
  * - woken process blocks are discarded from the list after having task zeroed
  * - writers are only marked woken if downgrading is false
+ *
+ * Implies rwsem_del_waiter() for all woken readers.
  */
 static void rwsem_mark_wake(struct rw_semaphore *sem,
 			    enum rwsem_wake_type wake_type,
@@ -574,17 +601,24 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 	}
 
 	adjustment = woken * RWSEM_READER_BIAS - adjustment;
-	if (list_empty(&sem->wait_list)) {
-		/* hit end of list above */
-		adjustment -= RWSEM_FLAG_WAITERS;
-	}
 
-	/*
-	 * When we've woken a reader, we no longer need to force writers
-	 * to give up the lock and we can clear HANDOFF.
-	 */
-	if (woken && (atomic_long_read(&sem->count) & RWSEM_FLAG_HANDOFF))
-		adjustment -= RWSEM_FLAG_HANDOFF;
+	oldcount = atomic_long_read(&sem->count);
+	if (list_empty(&sem->wait_list)) {
+		/*
+		 * Combined with list_move_tail() above, this implies
+		 * rwsem_del_waiter().
+		 */
+		adjustment -= RWSEM_FLAG_WAITERS;
+		if (oldcount & RWSEM_FLAG_HANDOFF)
+			adjustment -= RWSEM_FLAG_HANDOFF;
+	} else if (woken) {
+		/*
+		 * When we've woken a reader, we no longer need to force
+		 * writers to give up the lock and we can clear HANDOFF.
+		 */
+		if (oldcount & RWSEM_FLAG_HANDOFF)
+			adjustment -= RWSEM_FLAG_HANDOFF;
+	}
 
 	if (adjustment)
 		atomic_long_add(adjustment, &sem->count);
@@ -618,12 +652,12 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
  * race conditions between checking the rwsem wait list and setting the
  * sem->count accordingly.
  *
- * If wstate is WRITER_HANDOFF, it will make sure that either the handoff
- * bit is set or the lock is acquired with handoff bit cleared.
+ * Implies rwsem_del_waiter() on success.
  */
 static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
-					enum writer_wait_state wstate)
+					struct rwsem_waiter *waiter)
 {
+	bool first = rwsem_first_waiter(sem) == waiter;
 	long count, new;
 
 	lockdep_assert_held(&sem->wait_lock);
@@ -632,13 +666,19 @@ static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
 	do {
 		bool has_handoff = !!(count & RWSEM_FLAG_HANDOFF);
 
-		if (has_handoff && wstate == WRITER_NOT_FIRST)
-			return false;
+		if (has_handoff) {
+			if (!first)
+				return false;
+
+			/* First waiter inherits a previously set handoff bit */
+			waiter->handoff_set = true;
+		}
 
 		new = count;
 
 		if (count & RWSEM_LOCK_MASK) {
-			if (has_handoff || (wstate != WRITER_HANDOFF))
+			if (has_handoff || (!rt_task(waiter->task) &&
+					    !time_after(jiffies, waiter->timeout)))
 				return false;
 
 			new |= RWSEM_FLAG_HANDOFF;
@@ -655,9 +695,16 @@ static inline bool rwsem_try_write_lock(struct rw_semaphore *sem,
 	 * We have either acquired the lock with handoff bit cleared or
 	 * set the handoff bit.
 	 */
-	if (new & RWSEM_FLAG_HANDOFF)
+	if (new & RWSEM_FLAG_HANDOFF) {
+		waiter->handoff_set = true;
 		return false;
+	}
 
+	/*
+	 * Have rwsem_try_write_lock() fully imply rwsem_del_waiter() on
+	 * success.
+	 */
+	list_del(&waiter->list);
 	rwsem_set_owner(sem);
 	return true;
 }
@@ -983,7 +1030,6 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, int state)
 	long rcnt = (count >> RWSEM_READER_SHIFT);
 	struct rwsem_waiter waiter;
 	DEFINE_WAKE_Q(wake_q);
-	bool is_first_waiter = false;
 	bool wake = false;
 
 	/*
@@ -1039,9 +1085,7 @@ queue:
 		}
 		adjustment += RWSEM_FLAG_WAITERS;
 	}
-
-	/* is_first_waiter == true means we are first in the queue */
-	is_first_waiter = rwsem_list_add_per_prio(&waiter, sem);
+	rwsem_add_waiter(sem, &waiter);
 
 	/* we're now waiting on the lock, but no longer actively locking */
 	count = atomic_long_add_return(adjustment, &sem->count);
@@ -1057,7 +1101,7 @@ queue:
 		wake = true;
 	}
 	if (wake || (!(count & RWSEM_WRITER_MASK) &&
-		    (adjustment & RWSEM_FLAG_WAITERS || is_first_waiter)))
+		    (adjustment & RWSEM_FLAG_WAITERS)))
 		rwsem_mark_wake(sem, RWSEM_WAKE_ANY, &wake_q);
 
 	raw_spin_unlock_irq(&sem->wait_lock);
@@ -1085,11 +1129,7 @@ queue:
 	return sem;
 
 out_nolock:
-	list_del(&waiter.list);
-	if (list_empty(&sem->wait_list)) {
-		atomic_long_andnot(RWSEM_FLAG_WAITERS|RWSEM_FLAG_HANDOFF,
-				   &sem->count);
-	}
+	rwsem_del_waiter(sem, &waiter);
 	raw_spin_unlock_irq(&sem->wait_lock);
 	__set_current_state(TASK_RUNNING);
 	return ERR_PTR(-EINTR);
@@ -1102,11 +1142,8 @@ static struct rw_semaphore *
 rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 {
 	long count;
-	enum writer_wait_state wstate;
 	struct rwsem_waiter waiter;
-	struct rw_semaphore *ret = sem;
 	DEFINE_WAKE_Q(wake_q);
-	bool is_first_waiter = false;
 
 	/* do optimistic spinning and steal lock if possible */
 	if (rwsem_can_spin_on_owner(sem) && rwsem_optimistic_spin(sem)) {
@@ -1121,20 +1158,13 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 	waiter.task = current;
 	waiter.type = RWSEM_WAITING_FOR_WRITE;
 	waiter.timeout = jiffies + RWSEM_WAIT_TIMEOUT;
+	waiter.handoff_set = false;
 
 	raw_spin_lock_irq(&sem->wait_lock);
-
-	/* account for this before adding a new element to the list */
-	wstate = list_empty(&sem->wait_list) ? WRITER_FIRST : WRITER_NOT_FIRST;
-
-	/*
-	 * is_first_waiter == true means we are first in the queue,
-	 * so there is no read locks that were queued ahead of us.
-	 */
-	is_first_waiter = rwsem_list_add_per_prio(&waiter, sem);
+	rwsem_add_waiter(sem, &waiter);
 
 	/* we're now waiting on the lock */
-	if (wstate == WRITER_NOT_FIRST) {
+	if (rwsem_first_waiter(sem) != &waiter) {
 		count = atomic_long_read(&sem->count);
 
 		/*
@@ -1145,7 +1175,7 @@ rwsem_down_write_slowpath(struct rw_semaphore *sem, int state)
 		 *     must be read owned; so we try to wake any read lock
 		 *     waiters that were queued ahead of us.
 		 */
-		if (is_first_waiter || count & RWSEM_WRITER_MASK)
+		if (count & RWSEM_WRITER_MASK)
 			goto wait;
 
 		rwsem_mark_wake(sem, (count & RWSEM_READER_MASK)
@@ -1170,12 +1200,15 @@ wait:
 	/* wait until we successfully acquire the lock */
 	set_current_state(state);
 	for (;;) {
-		if (rwsem_try_write_lock(sem, wstate)) {
+		if (rwsem_try_write_lock(sem, &waiter)) {
 			/* rwsem_try_write_lock() implies ACQUIRE on success */
 			break;
 		}
 
 		raw_spin_unlock_irq(&sem->wait_lock);
+
+		if (signal_pending_state(state, current))
+			goto out_nolock;
 
 		/*
 		 * After setting the handoff bit and failing to acquire
@@ -1185,66 +1218,34 @@ wait:
 		 * In this case, we attempt to acquire the lock again
 		 * without sleeping.
 		 */
-		if (wstate == WRITER_HANDOFF &&
-		    rwsem_spin_on_owner(sem) == OWNER_NULL)
-			goto trylock_again;
+		if (waiter.handoff_set) {
+			enum owner_state owner_state;
 
-		/* Block until there are no active lockers. */
-		for (;;) {
-			if (signal_pending_state(state, current))
-				goto out_nolock;
+			preempt_disable();
+			owner_state = rwsem_spin_on_owner(sem);
+			preempt_enable();
 
-			schedule();
-			set_current_state(state);
-			/*
-			 * If HANDOFF bit is set, unconditionally do
-			 * a trylock.
-			 */
-			if (wstate == WRITER_HANDOFF)
-				break;
-
-			if ((wstate == WRITER_NOT_FIRST) &&
-			    (rwsem_first_waiter(sem) == &waiter))
-				wstate = WRITER_FIRST;
-
-			count = atomic_long_read(&sem->count);
-			if (!(count & RWSEM_LOCK_MASK))
-				break;
-
-			/*
-			 * The setting of the handoff bit is deferred
-			 * until rwsem_try_write_lock() is called.
-			 */
-			if ((wstate == WRITER_FIRST) && (rt_task(current) ||
-			    time_after(jiffies, waiter.timeout))) {
-				wstate = WRITER_HANDOFF;
-				break;
-			}
+			if (owner_state == OWNER_NULL)
+				goto trylock_again;
 		}
+
+		schedule();
+		set_current_state(state);
 trylock_again:
 		raw_spin_lock_irq(&sem->wait_lock);
 	}
 	__set_current_state(TASK_RUNNING);
-	list_del(&waiter.list);
 	raw_spin_unlock_irq(&sem->wait_lock);
-
-	return ret;
+	return sem;
 
 out_nolock:
 	__set_current_state(TASK_RUNNING);
 	raw_spin_lock_irq(&sem->wait_lock);
-	list_del(&waiter.list);
-
-	if (unlikely(wstate == WRITER_HANDOFF))
-		atomic_long_add(-RWSEM_FLAG_HANDOFF,  &sem->count);
-
-	if (list_empty(&sem->wait_list))
-		atomic_long_andnot(RWSEM_FLAG_WAITERS, &sem->count);
-	else
+	rwsem_del_waiter(sem, &waiter);
+	if (!list_empty(&sem->wait_list))
 		rwsem_mark_wake(sem, RWSEM_WAKE_ANY, &wake_q);
 	raw_spin_unlock_irq(&sem->wait_lock);
 	wake_up_q(&wake_q);
-
 	return ERR_PTR(-EINTR);
 }
 
