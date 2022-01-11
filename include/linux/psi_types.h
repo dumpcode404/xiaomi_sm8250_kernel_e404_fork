@@ -125,8 +125,6 @@ struct psi_trigger {
 	 * Stall time growth for the last event in ns.
 	 */
 	u64 last_event_growth;
-	/* Refcounting to prevent premature destruction */
-	struct kref refcount;
 };
 
 struct psi_group {
