@@ -245,6 +245,7 @@ void *lru_gen_eviction(struct page *page)
 
 void lru_gen_refault(struct page *page, void *shadow)
 {
+	bool recent;
 	int hist, tier, refs;
 	int memcg_id;
 	bool workingset;
@@ -270,11 +271,17 @@ void lru_gen_refault(struct page *page, void *shadow)
 	lruvec = mem_cgroup_lruvec(pgdat, memcg);
 	lrugen = &lruvec->lrugen;
 
+	min_seq = READ_ONCE(lrugen->min_seq[type]);
+	recent = (token >> LRU_REFS_WIDTH) ==
+		 (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH));
+
+	/* the page may have migrated to another lruvec since eviction */
+	if (lruvec != mem_cgroup_page_lruvec(page, page_pgdat(page)))
+		goto unlock;
+
 	mod_lruvec_state(lruvec, WORKINGSET_REFAULT, delta);
 
-	min_seq = READ_ONCE(lrugen->min_seq[type]);
-	if ((token >> LRU_REFS_WIDTH) !=
-	    (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH)))
+	if (!recent)
 		goto unlock;
 
 	hist = lru_hist_from_seq(min_seq);
