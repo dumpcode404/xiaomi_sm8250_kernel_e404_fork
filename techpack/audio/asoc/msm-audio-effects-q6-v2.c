@@ -1082,7 +1082,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 	u32 packed_data_size = 0;
 	u8 *eq_config_data = NULL;
 	u32 *updt_config_data = NULL;
-	int config_param_length;
+	int config_param_length, prev_config_param_length = 0;
 
 	pr_debug("%s\n", __func__);
 	if (!ac || (devices == -EINVAL) || (num_commands == -EINVAL)) {
@@ -1202,7 +1202,12 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 			if (!eq_config_data)
 				eq_config_data = kzalloc(config_param_length,
 							 GFP_KERNEL);
-			else
+			else if (config_param_length != prev_config_param_length) {
+				if (eq_config_data)
+					kfree(eq_config_data);
+				eq_config_data = kzalloc(config_param_length,
+							GFP_KERNEL);
+			} else
 				memset(eq_config_data, 0, config_param_length);
 			if (!eq_config_data) {
 				pr_err("%s, EQ_CONFIG:memory alloc failed\n",
@@ -1229,6 +1234,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 				*updt_config_data++ =
 					eq->per_band_cfg[idx].band_idx;
 			}
+			prev_config_param_length = config_param_length;
 			break;
 		case EQ_BAND_INDEX:
 			if (length != 1 || index_offset != 0) {
@@ -1311,7 +1317,8 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 		pr_debug("%s: did not send pp params\n", __func__);
 invalid_config:
 	kfree(params);
-	kfree(eq_config_data);
+	if (eq_config_data)
+		kfree(eq_config_data);
 	return rc;
 }
 EXPORT_SYMBOL(msm_audio_effects_popless_eq_handler);
