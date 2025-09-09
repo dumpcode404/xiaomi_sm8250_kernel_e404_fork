@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2018-2020 Oplus. All rights reserved.
+
+config OPLUS_PORT
+	bool "oplus port"
+	default n
+	help
+	 This will allow all OPLUS Feature to be build
+
+config OPLUS_OPROJECT
+	bool "oplus project"
+	default y if OPLUS_PORT
+	help
+	 define this config to define oplus project
+	  
