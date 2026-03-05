@@ -6706,23 +6706,32 @@ long mem_cgroup_get_nr_swap_pages(struct mem_cgroup *memcg)
 bool mem_cgroup_swap_full(struct page *page)
 {
 	struct mem_cgroup *memcg;
+	bool ret = false;
 
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 
 	if (vm_swap_full())
 		return true;
 	if (!do_swap_account || !cgroup_subsys_on_dfl(memory_cgrp_subsys))
-		return false;
+		return ret;
 
+	/* stabilize the memcg and its ancestors against offline/release */
+	rcu_read_lock();
 	memcg = page->mem_cgroup;
-	if (!memcg)
-		return false;
+	if (!memcg) {
+		rcu_read_unlock();
+		return ret;
+	}
 
-	for (; memcg != root_mem_cgroup; memcg = parent_mem_cgroup(memcg))
-		if (page_counter_read(&memcg->swap) * 2 >= memcg->swap.max)
-			return true;
+	for (; memcg != root_mem_cgroup; memcg = parent_mem_cgroup(memcg)) {
+		if (page_counter_read(&memcg->swap) * 2 >= memcg->swap.max) {
+			ret = true;
+			break;
+		}
+	}
+	rcu_read_unlock();
 
-	return false;
+	return ret;
 }
 
 /* for remember boot option*/
