@@ -1095,7 +1095,7 @@ static enum page_references page_check_references(struct page *page,
 	if (referenced_ptes == -1)
 		return PAGEREF_KEEP;
 
-	if (lru_gen_enabled()) {
+	if (lru_gen_enabled() && !lru_gen_switching()) {
 		if (test_and_clear_bit(PG_willneed_hint, &page->flags))
 			return PAGEREF_ACTIVATE;
 
@@ -2644,6 +2644,7 @@ DEFINE_STATIC_KEY_ARRAY_TRUE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #else
 DEFINE_STATIC_KEY_ARRAY_FALSE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #endif
+DEFINE_STATIC_KEY_FALSE(lru_switch);
 
 /******************************************************************************
  *                          shorthand helpers
@@ -4905,6 +4906,8 @@ static void lru_gen_change_state(bool enable)
 	if (enable == lru_gen_enabled())
 		goto unlock;
 
+	static_branch_enable_cpuslocked(&lru_switch);
+
 	if (enable)
 		static_branch_enable_cpuslocked(&lru_gen_caps[LRU_GEN_CORE]);
 	else
@@ -4944,6 +4947,8 @@ static void lru_gen_change_state(bool enable)
 
 		cond_resched();
 	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)));
+
+	static_branch_disable_cpuslocked(&lru_switch);
 unlock:
 	mutex_unlock(&state_mutex);
 	put_online_mems();
@@ -5482,7 +5487,9 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 
 	if (lru_gen_enabled()) {
 		lru_gen_shrink_lruvec(lruvec, sc);
-		return;
+
+		if (!lru_gen_switching())
+			return;
 	}
 
 	get_scan_count(lruvec, memcg, sc, nr, lru_pages);
@@ -5993,7 +6000,7 @@ static void snapshot_refaults(struct mem_cgroup *root_memcg, pg_data_t *pgdat)
 {
 	struct mem_cgroup *memcg;
 
-	if (lru_gen_enabled())
+	if (lru_gen_enabled() && !lru_gen_switching())
 		return;
 
 	memcg = mem_cgroup_iter(root_memcg, NULL, NULL);
@@ -6372,7 +6379,9 @@ static void age_active_anon(struct pglist_data *pgdat,
 
 	if (lru_gen_enabled()) {
 		lru_gen_age_node(pgdat, sc);
-		return;
+
+		if (!lru_gen_switching())
+			return;
 	}
 
 	if (!total_swap_pages)

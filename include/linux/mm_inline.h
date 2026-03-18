@@ -118,6 +118,13 @@ static inline bool lru_gen_enabled(void)
 }
 #endif
 
+static inline bool lru_gen_switching(void)
+{
+	DECLARE_STATIC_KEY_FALSE(lru_switch);
+
+	return static_branch_unlikely(&lru_switch);
+}
+
 static inline bool lru_gen_in_fault(void)
 {
 	return current->in_lru_fault;
@@ -294,6 +301,11 @@ static inline bool lru_gen_del_page(struct lruvec *lruvec, struct page *page, bo
 #else
 
 static inline bool lru_gen_enabled(void)
+{
+	return false;
+}
+
+static inline bool lru_gen_switching(void)
 {
 	return false;
 }
