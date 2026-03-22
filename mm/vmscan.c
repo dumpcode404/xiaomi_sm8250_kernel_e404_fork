@@ -2968,7 +2968,10 @@ static bool should_skip_mm(struct mm_struct *mm, struct lru_gen_mm_walk *walk)
 	if (size < MIN_LRU_BATCH)
 		return true;
 
-	return !mmget_not_zero(mm);
+	/* pin the address space without preventing exit_mmap() */
+	mmgrab(mm);
+
+	return false;
 }
 
 static bool iterate_mm_list(struct lruvec *lruvec, struct lru_gen_mm_walk *walk,
@@ -3032,7 +3035,7 @@ done:
 		reset_bloom_filter(lruvec, walk->max_seq + 1);
 
 	if (*iter)
-		mmput_async(*iter);
+		mmdrop(*iter);
 
 	*iter = mm;
 
