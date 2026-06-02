@@ -12682,16 +12682,28 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 
 			if (sched_feat(NI_RANDOM) && sd->newidle_ratio < 1024) {
 				/*
-				 * Throw a 1k sided dice; and only run
-				 * newidle_balance according to the success
-				 * rate.
+				 * Bresenham accumulator instead of a random
+				 * draw.
+				 *
+				 * Accumulate (1 + newidle_ratio) on each
+				 * call and run a balance once the sum
+				 * reaches 1024.
+				 *
+				 * For a constant newidle_ratio this gives
+				 * exactly (1 + newidle_ratio) attempts per
+				 * 1024 steps, spaced within one step of the
+				 * ideal interval. The accumulator is not
+				 * reset with the stats window, so its carry
+				 * is preserved.
 				 */
-				u32 d1k = sched_rng() % 1024;
 				weight = 1 + sd->newidle_ratio;
-				if (d1k > weight) {
+
+				sd->newidle_window_pos += weight;
+				if (sd->newidle_window_pos < 1024) {
 					update_newidle_stats(sd, 0);
 					continue;
 				}
+				sd->newidle_window_pos -= 1024;
 				weight = (1024 + weight/2) / weight;
 			}
 
