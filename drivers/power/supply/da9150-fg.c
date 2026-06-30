@@ -251,9 +251,9 @@ static int da9150_fg_current_avg(struct da9150_fg *fg,
 				      DA9150_QIF_SD_GAIN_SIZE);
 	da9150_fg_read_sync_end(fg);
 
-	div = (u64) (sd_gain * shunt_val * 65536ULL);
+	div = 65536ULL * sd_gain * shunt_val;
 	do_div(div, 1000000);
-	res = (u64) (iavg * 1000000ULL);
+	res = 1000000ULL * iavg;
 	do_div(res, div);
 
 	val->intval = (int) res;
@@ -363,7 +363,7 @@ static void da9150_fg_work(struct work_struct *work)
 	if (da9150_fg_soc_changed(fg))
 		power_supply_changed(fg->battery);
 
-	queue_delayed_work(system_power_efficient_wq, &fg->work, msecs_to_jiffies(fg->interval));
+	schedule_delayed_work(&fg->work, msecs_to_jiffies(fg->interval));
 }
 
 /* SOC level event configuration */
@@ -511,7 +511,7 @@ static int da9150_fg_probe(struct platform_device *pdev)
 	 */
 	if (fg->interval) {
 		INIT_DELAYED_WORK(&fg->work, da9150_fg_work);
-		queue_delayed_work(system_power_efficient_wq, &fg->work,
+		schedule_delayed_work(&fg->work,
 				      msecs_to_jiffies(fg->interval));
 	}
 

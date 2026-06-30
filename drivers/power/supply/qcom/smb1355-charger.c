@@ -449,7 +449,7 @@ static void die_temp_work(struct work_struct *work)
 
 	chip->die_temp_deciDegC = 10 * (i + UB_COMP_OFFSET_DEGC);
 
-	queue_delayed_work(system_power_efficient_wq, &chip->die_temp_work,
+	schedule_delayed_work(&chip->die_temp_work,
 			msecs_to_jiffies(DIE_TEMP_MEAS_PERIOD_MS));
 }
 
@@ -851,7 +851,7 @@ static int smb1355_parallel_get_prop(struct power_supply *psy,
 		val->intval = 0;
 		break;
 	default:
-		pr_err_ratelimited("parallel psy get prop %d not supported\n",
+		pr_debug_ratelimited("parallel psy get prop %d not supported\n",
 			prop);
 		return -EINVAL;
 	}
@@ -913,7 +913,7 @@ static int smb1355_set_parallel_charging(struct smb1355 *chip, bool disable)
 		} else {
 			/* start the work to measure temperature */
 			chip->exit_die_temp = false;
-			queue_delayed_work(system_power_efficient_wq, &chip->die_temp_work, 0);
+			schedule_delayed_work(&chip->die_temp_work, 0);
 		}
 	}
 
