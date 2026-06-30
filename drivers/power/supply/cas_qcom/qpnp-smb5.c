@@ -1838,7 +1838,7 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_QUICK_CHARGE_TYPE:
 		chg->quick_charge_type = val->intval;
-		queue_delayed_work(system_power_efficient_wq, &chg->report_soc_decimal_work,
+		schedule_delayed_work(&chg->report_soc_decimal_work,
 				msecs_to_jiffies(REPORT_SOC_DECIMAL_MS));
 		break;
 	case POWER_SUPPLY_PROP_QUICK_CHARGE_POWER:
@@ -1958,7 +1958,7 @@ static int smb5_usb_port_get_prop(struct power_supply *psy,
 		rc = smblib_get_prop_input_current_settled(chg, val);
 		break;
 	default:
-		pr_err_ratelimited("Get prop %d is not supported in pc_port\n",
+		pr_debug_ratelimited("Get prop %d is not supported in pc_port\n",
 				psp);
 		return -EINVAL;
 	}
@@ -2903,7 +2903,7 @@ static int smb5_wireless_set_prop(struct power_supply *psy,
 			|| chg->wireless_charge_type == ADAPTER_XIAOMI_PD_45W
 			|| chg->wireless_charge_type == ADAPTER_XIAOMI_PD_60W
 			|| chg->wireless_charge_type == ADAPTER_XIAOMI_PD_100W)
-			queue_delayed_work(system_power_efficient_wq, &chg->report_soc_decimal_work,
+			schedule_delayed_work(&chg->report_soc_decimal_work,
 				msecs_to_jiffies(REPORT_SOC_DECIMAL_MS));
 		break;
 	case POWER_SUPPLY_PROP_WLS_CAR_ADAPTER:
@@ -3310,7 +3310,7 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 				POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN, val);
 		break;
 	default:
-		pr_err("batt power supply prop %d not supported\n", psp);
+		pr_debug("batt power supply prop %d not supported\n", psp);
 		return -EINVAL;
 	}
 
@@ -5261,7 +5261,7 @@ static int smb5_probe(struct platform_device *pdev)
 		goto free_irq;
 	}
 
-	queue_delayed_work(system_power_efficient_wq, &chg->reg_work, 30 * HZ);
+	schedule_delayed_work(&chg->reg_work, 30 * HZ);
 	pr_info("QPNP SMB5 probed successfully\n");
 
 	return rc;

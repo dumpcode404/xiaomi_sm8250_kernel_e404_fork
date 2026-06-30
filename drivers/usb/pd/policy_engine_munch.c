@@ -4471,7 +4471,7 @@ static ssize_t select_pdo_store(struct device *dev,
 
 	/* use xiaomi pps control state machine */
 	if (pd->non_qcom_pps_ctr && pd->spec_rev == USBPD_REV_30) {
-		usbpd_dbg(&pd->dev,
+		usbpd_info(&pd->dev,
 			"PPS is controlled by ourself, return not support\n");
 		goto out;
 	}

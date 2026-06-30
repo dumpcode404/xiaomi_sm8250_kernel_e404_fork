@@ -3,7 +3,7 @@
  * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
  */
 
-#define pr_fmt(fmt)
+#define pr_fmt(fmt) "QCOM-STEPCHG: %s: " fmt, __func__
 
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -17,12 +17,6 @@
 #define STEP_CHG_VOTER		"STEP_CHG_VOTER"
 #define STEP_BMS_CHG_VOTER	"STEP_BMS_CHG_VOTER"
 #define JEITA_VOTER		"JEITA_VOTER"
-
-#undef pr_info
-#undef pr_err
-#define pr_info pr_debug
-#define pr_err pr_debug
-
 #define is_between(left, right, value) \
 		(((left) >= (right) && (left) >= (value) \
 			&& (value) >= (right)) \
@@ -490,7 +484,7 @@ static void get_config_work(struct work_struct *work)
 	return;
 
 reschedule:
-	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
+	schedule_delayed_work(&chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 }
@@ -594,8 +588,8 @@ static int get_val(struct range_data *range, int hysteresis, int current_index,
 static void taper_fcc_step_chg(struct step_chg_info *chip, int index,
 					int current_voltage)
 {
-	u32 current_fcc, target_fcc;
-	u32 current_debug;
+	int current_fcc, target_fcc,last_index_fcc;
+	int current_debug;
 	union power_supply_propval pval = {0, };
 	int pps_max_watts = 0;
 	if (index < 0) {
@@ -636,9 +630,13 @@ static void taper_fcc_step_chg(struct step_chg_info *chip, int index,
 		 * control parameter exceeds the high threshold of previous
 		 * step charging index configuration.
 		 */
-		vote(chip->fcc_votable, STEP_CHG_VOTER, true, max(target_fcc,
-			current_fcc - TAPERED_STEP_CHG_FCC_REDUCTION_STEP_MA));
 		current_debug = current_fcc - TAPERED_STEP_CHG_FCC_REDUCTION_STEP_MA;
+		if (current_debug < 0) {
+			current_debug = 0;
+			pr_err("fcc_votable_CV %d\n",current_debug);
+		}
+		vote(chip->fcc_votable, STEP_CHG_VOTER, true, max(target_fcc,
+			current_debug));
 		pr_err("fcc_votable_CV %d-%d-%d\n",current_fcc, target_fcc,current_debug);
 	} else if ((current_fcc >
 		chip->step_chg_config->fcc_cfg[index - 1].value) &&
@@ -650,10 +648,15 @@ static void taper_fcc_step_chg(struct step_chg_info *chip, int index,
 		 * index without FCCs saturation for the previous index, ramp
 		 * down FCC till previous index FCC configuration is reached.
 		 */
-		vote(chip->fcc_votable, STEP_CHG_VOTER, true,
-			max(chip->step_chg_config->fcc_cfg[index - 1].value,
-			current_fcc - TAPERED_STEP_CHG_FCC_REDUCTION_STEP_MA));
 		current_debug = current_fcc - TAPERED_STEP_CHG_FCC_REDUCTION_STEP_MA;
+		if (current_debug < 0) {
+			current_debug = 0;
+			pr_err("fcc_votable_CV %d\n",current_debug);
+		}
+
+		last_index_fcc = chip->step_chg_config->fcc_cfg[index - 1].value;
+		vote(chip->fcc_votable, STEP_CHG_VOTER, true,
+			max(last_index_fcc,current_debug));
 		pr_err("fcc_votable_CV1 %d-%d-%d\n",current_fcc, chip->step_chg_config->fcc_cfg[index - 1].value,current_debug);
 	}
 }
@@ -940,8 +943,8 @@ static int handle_jeita(struct step_chg_info *chip)
 		chip->jeita_fv_config->param.hysteresis = 5;
 		chip->jeita_fcc_config->param.hysteresis = 5;
 	} else  {
-		chip->jeita_fv_config->param.hysteresis = 20;
-		chip->jeita_fcc_config->param.hysteresis = 20;
+		chip->jeita_fv_config->param.hysteresis = 18;
+		chip->jeita_fcc_config->param.hysteresis = 18;
 	}
 
 	rc = get_val(chip->jeita_fcc_config->fcc_cfg,
@@ -971,8 +974,9 @@ static int handle_jeita(struct step_chg_info *chip)
 		return -EINVAL;
 
 	if (chip->cold_step_chg_cfg_valid) {
-		vote(chip->fcc_votable, JEITA_VOTER, fcc_ua ? true : false, fcc_ua);
-		if (chip->jeita_fcc_index == 0 && chip->jeita_cold_fcc_index != 0)
+		if(chip->jeita_fcc_index > 0)
+			vote(chip->fcc_votable, JEITA_VOTER, fcc_ua ? true : false, fcc_ua);
+		if (chip->jeita_fcc_index == 0)
 			vote(chip->fcc_votable, JEITA_VOTER, cold_fcc_ua ? true : false, cold_fcc_ua);
 	} else {
 		vote(chip->fcc_votable, JEITA_VOTER, fcc_ua ? true : false, fcc_ua);
@@ -1027,7 +1031,7 @@ static int handle_jeita(struct step_chg_info *chip)
 		curr_vbat_uv = pval.intval;
 
 		if (!chip->six_pin_battery) {
-			if ((curr_vbat_uv > fv_uv) && (temp >= chip->jeita_warm_th))
+			if ((curr_vbat_uv > WARM_VFLOAT_UV) && (temp >= chip->jeita_warm_th))
 				vote(chip->usb_icl_votable, JEITA_VOTER, true, 0);
 			else if (curr_vbat_uv < (fv_uv - JEITA_SUSPEND_HYST_UV))
 				vote(chip->usb_icl_votable, JEITA_VOTER, false, 0);
@@ -1045,7 +1049,7 @@ static int handle_jeita(struct step_chg_info *chip)
 				if (curr_vbat_uv > fv_uv + JEITA_SIX_PIN_BATT_HYST_UV) {
 					if (pval.intval == POWER_SUPPLY_CHARGE_TYPE_TAPER && fv_uv == WARM_VFLOAT_UV)
 						vote(chip->usb_icl_votable, JEITA_VOTER, true, 0);
-				} else if (curr_vbat_uv < (fv_uv - JEITA_SUSPEND_HYST_UV)) {
+				} else if (curr_vbat_uv < (WARM_VFLOAT_UV - JEITA_SUSPEND_HYST_UV)) {
 					vote(chip->usb_icl_votable, JEITA_VOTER, false, 0);
 				}
 			} else {
@@ -1060,7 +1064,13 @@ static int handle_jeita(struct step_chg_info *chip)
 	}
 
 set_jeita_fv:
-	vote(chip->fv_votable, JEITA_VOTER, fv_uv ? true : false, fv_uv);
+	pval.intval = 0;
+	rc = power_supply_get_property(chip->batt_psy,
+				POWER_SUPPLY_PROP_SMART_BATT, &pval);
+	if (rc < 0) {
+		pr_err("Get samrt batt failed, rc = %d\n", rc);	
+	}
+	vote(chip->fv_votable, JEITA_VOTER, fv_uv ? true : false, fv_uv - pval.intval);
 
 update_time:
 	chip->jeita_last_update_time = ktime_get();
@@ -1093,7 +1103,7 @@ static int handle_battery_insertion(struct step_chg_info *chip)
 			 * Get config for the new inserted battery, delay
 			 * to make sure BMS has read out the batt_id.
 			 */
-			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
+			schedule_delayed_work(&chip->get_config_work,
 				msecs_to_jiffies(WAIT_BATT_ID_READY_MS));
 		}
 	}
@@ -1189,14 +1199,14 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "battery") == 0)
 			|| (strcmp(psy->desc->name, "usb") == 0)) {
 		__pm_stay_awake(chip->step_chg_ws);
-		queue_delayed_work(system_power_efficient_wq, &chip->status_change_work, 0);
+		schedule_delayed_work(&chip->status_change_work, 0);
 	}
 
 	if ((strcmp(psy->desc->name, "bms") == 0)) {
 		if (chip->bms_psy == NULL)
 			chip->bms_psy = psy;
 		if (!chip->config_is_read)
-			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work, 0);
+			schedule_delayed_work(&chip->get_config_work, 0);
 	}
 
 	return NOTIFY_OK;
@@ -1281,7 +1291,7 @@ int qcom_step_chg_init(struct device *dev,
 		goto release_wakeup_source;
 	}
 
-	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
+	schedule_delayed_work(&chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 	the_chip = chip;
@@ -1306,3 +1316,4 @@ void qcom_step_chg_deinit(void)
 	wakeup_source_unregister(chip->step_chg_ws);
 	the_chip = NULL;
 }
+

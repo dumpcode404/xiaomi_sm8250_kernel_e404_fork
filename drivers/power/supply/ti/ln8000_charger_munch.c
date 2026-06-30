@@ -48,13 +48,34 @@ static const char *ln8000_dev_name[] = {
 };
 
 #define ln_err(fmt, ...)                        \
-	do {} while (0);
+	do {                                            \
+		if (info->dev_role == LN_ROLE_STANDALONE)   \
+			printk(KERN_ERR "ln8000-standalone: %s: " fmt, __func__, ##__VA_ARGS__);   \
+		else if (info->dev_role == LN_ROLE_MASTER)                              \
+			printk(KERN_ERR "ln8000-master: %s: " fmt, __func__, ##__VA_ARGS__);   \
+		else                                                                    \
+			printk(KERN_ERR "ln8000-slave: %s: " fmt, __func__, ##__VA_ARGS__);   \
+	} while (0);
 
 #define ln_info(fmt, ...)                       \
-	do {} while (0);
+	do {                                            \
+		if (info->dev_role == LN_ROLE_STANDALONE)   \
+			printk(KERN_INFO "ln8000-standalone: %s: " fmt, __func__, ##__VA_ARGS__);  \
+		else if (info->dev_role == LN_ROLE_MASTER)                              \
+			printk(KERN_INFO "ln8000-master: %s: " fmt, __func__, ##__VA_ARGS__);  \
+		else                                                                    \
+			printk(KERN_INFO "ln8000-slave: %s: " fmt, __func__, ##__VA_ARGS__);  \
+	} while (0);
 
 #define ln_dbg(fmt, ...)                        \
-	do {} while (0);
+	do {                                            \
+		if (info->dev_role == LN_ROLE_STANDALONE)   \
+			printk(KERN_DEBUG "ln8000-standalone: %s: " fmt, __func__, ##__VA_ARGS__); \
+		else if (info->dev_role == LN_ROLE_MASTER)                              \
+			printk(KERN_DEBUG "ln8000-master: %s: " fmt, __func__, ##__VA_ARGS__); \
+		else                                                                    \
+			printk(KERN_DEBUG "ln8000-slave: %s: " fmt, __func__, ##__VA_ARGS__); \
+	} while (0);
 
 #define LN8000_REG_PRINT(reg_addr, val)                         \
 do {                                                            \
@@ -1460,7 +1481,7 @@ static void check_vac_ov_work(struct ln8000_info *info)
 
 	if (sys_st == 0x02 && fault1_st == 0x00) {  /* connected valid VBUS */
 		if (info->vac_ov_work_on == 0) {        /* vac_ov_work not worked */
-			queue_delayed_work(system_power_efficient_wq, &info->vac_ov_work, msecs_to_jiffies(0));
+			schedule_delayed_work(&info->vac_ov_work, msecs_to_jiffies(0));
 			info->vac_ov_work_on = 1;
 			ln_info("schedule_work : vac_ov_work\n");
 		}
