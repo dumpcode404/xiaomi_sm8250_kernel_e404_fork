@@ -971,8 +971,15 @@ static ssize_t fts_tprwreg_store(struct device *dev,
 				reg = rw_op.reg & 0xFF;
 				val = rw_op.val & 0xFF;
 				rw_op.res = fts_write_reg(reg, val);
+				if (rw_op.res == 0 && reg == FTS_REG_REPORT_RATE) {
+					fts_data->report_rate = val;
+				}
 			} else {
 				rw_op.res = fts_write(rw_op.opbuf, rw_op.len);
+				if (rw_op.res == 0 && rw_op.opbuf &&
+				    rw_op.opbuf[0] == FTS_REG_REPORT_RATE) {
+					fts_data->report_rate = rw_op.opbuf[1];
+				}
 			}
 			if (rw_op.res < 0) {
 				FTS_ERROR("Could not write 0x%02x", rw_op.reg);

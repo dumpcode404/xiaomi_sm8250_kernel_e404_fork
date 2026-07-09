@@ -145,6 +145,7 @@ struct fts_ts_data {
 	struct ts_ic_info ic_info;
 	struct workqueue_struct *ts_workqueue;
 	struct work_struct fwupg_work;
+	struct delayed_work report_rate_work;
 	struct delayed_work esdcheck_work;
 	struct delayed_work prc_work;
  	struct regulator *vsp;
@@ -157,6 +158,7 @@ struct fts_ts_data {
 	bool suspended;
 	bool fw_loading;
 	bool irq_disabled;
+	u8 report_rate;
 	/*
 	  *when fod unlock, release all points to avoid lose point up_action
 	  */

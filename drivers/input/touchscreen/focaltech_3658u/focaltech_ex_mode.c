@@ -264,6 +264,16 @@ static struct attribute_group fts_touch_mode_group = {
 	.attrs = fts_touch_mode_attrs,
 };
 
+static void fts_report_rate_work_func(struct work_struct *work)
+{
+	struct fts_ts_data *ts_data =
+		container_of(work, struct fts_ts_data, report_rate_work.work);
+
+	if (ts_data->report_rate != 0) {
+		fts_write_reg(FTS_REG_REPORT_RATE, ts_data->report_rate);
+	}
+}
+
 int fts_ex_mode_recovery(struct fts_ts_data *ts_data)
 {
 	if (ts_data->glove_mode) {
@@ -278,6 +288,12 @@ int fts_ex_mode_recovery(struct fts_ts_data *ts_data)
 		fts_ex_mode_switch(MODE_CHARGER, ENABLE);
 	}
 
+	if (ts_data->report_rate != 0) {
+		queue_delayed_work(ts_data->ts_workqueue,
+				   &ts_data->report_rate_work,
+				   msecs_to_jiffies(2000));
+	}
+
 	return 0;
 }
 
@@ -288,6 +304,8 @@ int fts_ex_mode_init(struct fts_ts_data *ts_data)
 	ts_data->glove_mode = DISABLE;
 	ts_data->cover_mode = DISABLE;
 	ts_data->charger_mode = DISABLE;
+	ts_data->report_rate = 0;
+	INIT_DELAYED_WORK(&ts_data->report_rate_work, fts_report_rate_work_func);
 
 	ret = sysfs_create_group(&ts_data->dev->kobj, &fts_touch_mode_group);
 	if (ret < 0) {

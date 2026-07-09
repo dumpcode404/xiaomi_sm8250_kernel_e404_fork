@@ -72,6 +72,7 @@
 /*register address*/
 #define FTS_REG_INT_CNT                     0x8F
 #define FTS_REG_FLOW_WORK_CNT               0x91
+#define FTS_REG_REPORT_RATE                 0x88
 #define FTS_REG_WORKMODE                    0x00
 #define FTS_REG_WORKMODE_FACTORY_VALUE      0x40
 #define FTS_REG_WORKMODE_WORK_VALUE         0x00
