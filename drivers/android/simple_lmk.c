@@ -5,7 +5,6 @@
 
 #define pr_fmt(fmt) "simple_lmk: " fmt
 
-#include <linux/delay.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
@@ -13,7 +12,6 @@
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
 #include <linux/sort.h>
-#include <linux/vmpressure.h>
 #include <uapi/linux/sched/types.h>
 
 /* The minimum number of pages to free per reclaim */
@@ -280,13 +278,13 @@ static void scan_and_kill(void)
 			set_tsk_thread_flag(t, TIF_MEMDIE);
 		for_each_thread(vtsk, t)
 			set_task_rt_prio(t, 1);
-		/* Signals can't wake frozen tasks; only a thaw operation can */
-		for_each_thread(vtsk, t)
-			__thaw_task(t);
 		rcu_read_unlock();
 
 		/* Allow the victim to run on any CPU. This won't schedule. */
 		set_cpus_allowed_ptr(vtsk, cpu_all_mask);
+
+		/* Signals can't wake frozen tasks; only a thaw operation can */
+		__thaw_task(vtsk);
 
 		/* Store the number of anon pages to sort victims for reaping */
 		victim->size = get_mm_counter(mm, MM_ANONPAGES);
@@ -311,8 +309,6 @@ static void scan_and_kill(void)
 	/* Wait until all the victims die or until the timeout is reached */
 	if (!wait_for_completion_timeout(&reclaim_done, RECLAIM_EXPIRES))
 		pr_info("Timeout hit waiting for victims to die, proceeding\n");
-	else
-		msleep(28);
 
 	/* Clean up for future reclaims but let the reaper thread keep going */
 	write_lock(&mm_free_lock);
@@ -352,7 +348,7 @@ static struct mm_struct *next_reap_victim(void)
 			continue;
 
 		/* Do a trylock so the reaper thread doesn't sleep */
-		if (!down_read_trylock(&mm->mmap_sem)) {
+		if (!mmap_read_trylock(mm)) {
 			should_retry = true;
 			continue;
 		}
@@ -368,7 +364,7 @@ static struct mm_struct *next_reap_victim(void)
 		 */
 		if (!test_bit(MMF_OOM_SKIP, &mm->flags))
 			break;
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 	}
 
 	if (!mm) {
@@ -407,7 +403,7 @@ static void reap_victims(void)
 			clear_bit(MMF_OOM_VICTIM, &mm->flags);
 			set_bit(MMF_OOM_SKIP, &mm->flags);
 		}
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 	}
 }
 
@@ -456,23 +452,14 @@ void simple_lmk_mm_freed(struct mm_struct *mm)
 	read_unlock(&mm_free_lock);
 }
 
-static int simple_lmk_vmpressure_cb(struct notifier_block *nb,
-				    unsigned long pressure, void *data)
+void simple_lmk_reclaim_needed(void)
 {
-	if (pressure >= 98) {
-		atomic_set(&needs_reclaim, 1);
-		smp_mb__after_atomic();
-		if (waitqueue_active(&oom_waitq))
-			wake_up(&oom_waitq);
-	}
-
-	return NOTIFY_OK;
+	atomic_set(&needs_reclaim, 1);
+	smp_mb__after_atomic();
+	if (waitqueue_active(&oom_waitq))
+		wake_up(&oom_waitq);
 }
-
-static struct notifier_block vmpressure_notif = {
-	.notifier_call = simple_lmk_vmpressure_cb,
-	.priority = INT_MAX
-};
+EXPORT_SYMBOL_GPL(simple_lmk_reclaim_needed);
 
 /* Initialize Simple LMK when lmkd in Android writes to the minfree parameter */
 static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
@@ -487,7 +474,6 @@ static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 		thread = kthread_run(simple_lmk_reclaim_thread, NULL,
 				     "simple_lmkd");
 		BUG_ON(IS_ERR(thread));
-		BUG_ON(vmpressure_notifier_register(&vmpressure_notif));
 	}
 
 	return 0;
