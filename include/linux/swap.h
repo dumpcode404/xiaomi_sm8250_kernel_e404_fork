@@ -404,6 +404,7 @@ int add_swap_extent(struct swap_info_struct *sis, unsigned long start_page,
 int generic_swapfile_activate(struct swap_info_struct *, struct file *,
 		sector_t *);
 
+extern int vm_kcompressd;
 int kcompressd(void *p);
 void kcompressd_drain_queue(struct pglist_data *pgdat, int hid);
 

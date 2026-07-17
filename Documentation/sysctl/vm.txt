@@ -33,6 +33,7 @@ Currently, these files are in /proc/sys/vm:
 - extfrag_threshold
 - extra_free_kbytes
 - hugetlb_shm_group
+- kcompressd
 - laptop_mode
 - legacy_va_layout
 - lowmem_reserve_ratio
@@ -297,6 +298,18 @@ hugetlb_shm_group
 
 hugetlb_shm_group contains group id that is allowed to create SysV
 shared memory segment using hugetlb page.
+
+==============================================================
+
+kcompressd
+
+Available only when CONFIG_SWAP is set. It is the number of pages that may
+wait in the queue of each kcompressd thread. kswapd hands anonymous pages
+that go to zram over to these threads, so that they are compressed there.
+When the queues are full, kswapd compresses the page itself.
+
+The value 0 stops handing over new pages; pages already queued are still
+written. The default and the maximum is 128, the size of one queue.
 
 ==============================================================
 
