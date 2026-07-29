@@ -2261,6 +2261,16 @@ retry:
 	if (!gfpflags_allow_blocking(gfp_mask))
 		goto nomem;
 
+	/*
+	 * OOM victim still needs memory to exit but the OOM reaper may be
+	 * unable to help it; without this, threads of a large group can
+	 * contend on oom_lock just to learn nothing is killable anymore.
+	 * Bail out early and fail the charge to expedite their exit.
+	 */
+	if (tsk_is_oom_victim(current) && current->signal->oom_mm &&
+	    test_bit(MMF_OOM_SKIP, &current->signal->oom_mm->flags))
+		goto nomem;
+
 	memcg_memory_event(mem_over_limit, MEMCG_MAX);
 
 	nr_reclaimed = try_to_free_mem_cgroup_pages(mem_over_limit, nr_pages,
