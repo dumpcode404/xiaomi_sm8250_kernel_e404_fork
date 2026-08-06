@@ -89,6 +89,8 @@ struct cpufreq_qcom {
 	char dcvsh_irq_name[MAX_FN_SIZE];
 	bool is_irq_enabled;
 	bool is_irq_requested;
+	bool exited;
+	bool cancel_throttle;
 };
 
 struct cpufreq_counter {
