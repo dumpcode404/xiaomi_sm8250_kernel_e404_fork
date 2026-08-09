@@ -6,6 +6,7 @@
  */
 
 #include <linux/pm_runtime.h>
+#include <linux/blk-pm.h>
 #include <linux/export.h>
 #include <linux/async.h>
 
