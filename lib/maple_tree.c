@@ -6097,7 +6097,13 @@ write_retry:
 	mas_reset(mas);
 	mas_wr_store_setup(&wr_mas);
 	mas_wr_store_entry(&wr_mas);
-	if (mas_nomem(mas, GFP_KERNEL))
+	/*
+	 * In low memory situations, the allocation is retried with the gfp flag
+	 * GFP_KERNEL | __GFP_NOFAIL so that the entry is always removed. The
+	 * internal spinlock is dropped in mas_nomem(), however the external
+	 * lock is not dropped.
+	 */
+	if (mas_nomem(mas, GFP_KERNEL | __GFP_NOFAIL))
 		goto write_retry;
 
 	return entry;
