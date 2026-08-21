@@ -4840,7 +4840,12 @@ static bool fill_evictable(struct lruvec *lruvec)
 			prefetchw_prev_lru_page(page, head, flags);
 
 			del_page_from_lru_list(page, lruvec);
-			success = lru_gen_add_page(lruvec, page, false);
+			/*
+			 * Borrow reclaiming=true to place inactive pages in
+			 * the older generations, preserving their inactive
+			 * placement when enabling MGLRU.
+			 */
+			success = lru_gen_add_page(lruvec, page, !active);
 			VM_WARN_ON_ONCE(!success);
 
 			if (!--remaining)
