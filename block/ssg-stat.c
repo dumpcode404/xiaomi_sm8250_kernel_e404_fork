@@ -9,6 +9,11 @@
 #include <linux/blk-mq.h>
 #include <linux/sbitmap.h>
 
+/*
+ * blk-mq.h and blk-mq-tag.h include each other here, and the cycle only
+ * resolves when blk-mq.h is entered first, so keep this order.
+ */
+#include "blk-mq.h"
 #include "blk-mq-tag.h"
 #include "ssg.h"
 
