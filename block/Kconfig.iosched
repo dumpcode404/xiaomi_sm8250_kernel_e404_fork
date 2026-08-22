@@ -100,6 +100,29 @@ config BFQ_GROUP_IOSCHED
        Enable hierarchical scheduling in BFQ, using the blkio
        (cgroups-v1) or io (cgroups-v2) controller.
 
+config MQ_IOSCHED_SSG
+	tristate "SamSung Generic I/O scheduler"
+	default n
+	---help---
+	  SamSung Generic IO scheduler. A deadline derived scheduler for
+	  blk-mq that additionally caps the share of the tag pool a single
+	  thread group, and async writes as a whole, may hold.
+
+config MQ_IOSCHED_SSG_CGROUP
+	bool "Control Group for SamSung Generic I/O scheduler"
+	depends on MQ_IOSCHED_SSG && BLK_CGROUP
+	default n
+	---help---
+	  Control Group for SamSung Generic IO scheduler. Adds the per-cgroup
+	  ssg.max_available_ratio knob, limiting the percentage of the tag pool
+	  a cgroup may occupy.
+
+#
+# CONFIG_MQ_IOSCHED_SSG_WB (block/ssg-wb.c) is deliberately not ported: it is
+# a client of Samsung's out-of-tree "blk-sec" layer, and UFS WriteBooster is
+# already driven by ufshcd devfreq clock scaling in this tree.
+#
+
 endmenu
 
 endif
