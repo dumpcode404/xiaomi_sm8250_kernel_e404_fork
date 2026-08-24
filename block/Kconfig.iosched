@@ -55,7 +55,10 @@ choice
 		bool "CFQ" if IOSCHED_CFQ=y
 
 	config DEFAULT_NOOP
-		bool "No-op" if IOSCHED_NOOP=y 
+		bool "No-op" if IOSCHED_NOOP=y
+
+  config DEFAULT_SSG
+    bool "SSG" if MQ_IOSCHED_SSG=y
 
 endchoice
 
@@ -64,6 +67,7 @@ config DEFAULT_IOSCHED
 	default "deadline" if DEFAULT_DEADLINE
 	default "cfq" if DEFAULT_CFQ
 	default "noop" if DEFAULT_NOOP
+  default "ssg" if DEFAULT_SSG
 
 config MQ_IOSCHED_DEADLINE
 	tristate "MQ deadline I/O scheduler"
