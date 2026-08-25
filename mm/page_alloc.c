@@ -8291,12 +8291,25 @@ bool has_unmovable_pages(struct zone *zone, struct page *page, int count,
 		 */
 		if (PageHuge(page)) {
 			struct page *head = compound_head(page);
-			unsigned int skip_pages;
+			unsigned long skip_pages;
+			unsigned int order;
+			long pgoff;
 
 			if (!hugepage_migration_supported(page_hstate(head)))
 				goto unmovable;
 
-			skip_pages = (1 << compound_order(head)) - (page - head);
+			/*
+			 * The head may have been split or freed concurrently;
+			 * validate it before using it to skip PFNs, otherwise
+			 * a stale order could skip the rest of the pageblock.
+			 */
+			order = compound_order(head);
+			pgoff = page - head;
+			if (order >= MAX_ORDER || pgoff < 0 ||
+			    (unsigned long)pgoff >= (1UL << order))
+				goto unmovable;
+
+			skip_pages = (1UL << order) - (unsigned long)pgoff;
 			iter += skip_pages - 1;
 			continue;
 		}
