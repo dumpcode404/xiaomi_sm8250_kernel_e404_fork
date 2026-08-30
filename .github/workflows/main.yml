@@ -21,16 +21,16 @@ jobs:
             -b "${{ github.event.inputs.kernel_branch }}" \
             https://github.com/dumpcode404/xiaomi_sm8250_kernel_e404_fork.git kernel
 
-    - name: Debug
-      run: |
-        cd kernel
-    
-        echo "Current branch:"
-        git rev-parse --abbrev-ref HEAD
-    
-        echo
-        echo "Defconfig list:"
-        ls arch/arm64/configs/vendor | grep munch || true
+      - name: Debug
+        run: |
+          cd kernel
+
+          echo "Current branch:"
+          git rev-parse --abbrev-ref HEAD
+
+          echo
+          echo "Defconfig list:"
+          ls arch/arm64/configs/vendor | grep munch || true
           
       - name: Install Dependencies
         run: |
