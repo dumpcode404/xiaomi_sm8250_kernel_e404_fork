@@ -2,6 +2,14 @@ name: Build E404 Kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        type: choice
+        description: Select branch
+        options:
+          - rebase-bpf
+          - staging
+          - staging-bpf
 
 jobs:
   build:
@@ -11,6 +19,7 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.branch }}
           submodules: recursive
           fetch-depth: 1
 
