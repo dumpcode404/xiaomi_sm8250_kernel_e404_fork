@@ -17,11 +17,11 @@ jobs:
       - name: Setup KernelSU
         run: |
           if [ -d KernelSU ] && [ ! -e drivers/kernelsu ]; then
-      mkdir -p drivers
-      ln -sf $GITHUB_WORKSPACE/KernelSU drivers/kernelsu
+            mkdir -p drivers
+            ln -sf "$GITHUB_WORKSPACE/KernelSU" drivers/kernelsu
           fi
 
-        ls -la drivers/kernelsu
+          ls -la drivers/kernelsu || true
       
       - name: Install Dependencies
         run: |
