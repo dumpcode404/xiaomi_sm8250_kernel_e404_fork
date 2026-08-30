@@ -3,35 +3,24 @@ name: Build E404 Kernel
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        type: choice
-        description: Select branch
-        options:
-          - rebase-bpf
-          - staging
-          - staging-bpf
+      kernel_branch:
+        description: "Branch to build"
+        required: true
+        default: "rebase-bpf"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch }}
-          submodules: recursive
-          fetch-depth: 1
-
-      - name: Setup KernelSU
+      - name: Clone Kernel Source
         run: |
-          if [ -d KernelSU ] && [ ! -e drivers/kernelsu ]; then
-            mkdir -p drivers
-            ln -sf "$GITHUB_WORKSPACE/KernelSU" drivers/kernelsu
-          fi
+          git clone \
+            --recursive \
+            --depth=1 \
+            -b "${{ github.event.inputs.kernel_branch }}" \
+            https://github.com/dumpcode404/xiaomi_sm8250_kernel_e404_fork.git kernel
 
-          ls -la drivers/kernelsu || true
-      
       - name: Install Dependencies
         run: |
           sudo apt update
@@ -50,34 +39,28 @@ jobs:
 
       - name: Download Neutron Clang
         run: |
-          mkdir clang
-          cd clang
-
-          wget -O neutron.tar.zst \
+          wget -O clang.tar.zst \
           https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst
 
-          tar --zstd -xf neutron.tar.zst
-
-          find . -name clang
-
-      - name: Setup Toolchain
-        run: |
-          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang -type f -name clang | head -1)
-          echo "CLANG_BIN=$CLANG_BIN"
-
-          echo "$(dirname $CLANG_BIN)" >> $GITHUB_PATH
-
-          which clang
-          clang --version
+          mkdir clang
+          tar --zstd -xf clang.tar.zst -C clang
 
       - name: Build Kernel
+        working-directory: kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
 
+          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang -type f -name clang | head -1)
+
+          export PATH=$(dirname $CLANG_BIN):$PATH
+
+          clang --version
+
           make O=out vendor/munch_defconfig
 
-          make -j$(nproc) O=out \
+          make -j$(nproc) \
+            O=out \
             CC=clang \
             LLVM=1 \
             LLVM_IAS=1
@@ -87,11 +70,11 @@ jobs:
           git clone --depth=1 \
           https://github.com/kvsnr113/AnyKernel3.git AnyKernel3
 
-      - name: Package Zip
+      - name: Package Kernel
         run: |
-          cp out/arch/arm64/boot/Image AnyKernel3/
-          cp out/arch/arm64/boot/dtb AnyKernel3/
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
+          cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
 
           cd AnyKernel3
           zip -r9 ../E404-Kernel.zip *
