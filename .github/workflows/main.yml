@@ -42,8 +42,24 @@ jobs:
           wget -O clang.tar.zst \
           https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst
 
-          mkdir clang
+          mkdir -p clang
           tar --zstd -xf clang.tar.zst -C clang
+
+          echo "=== TOOLCHAIN STRUCTURE ==="
+          find clang | head -50
+
+      - name: Setup Toolchain
+        run: |
+          CLANG_DIR=$(find $GITHUB_WORKSPACE/clang -type d -name bin | head -1)
+
+          echo "CLANG_DIR=$CLANG_DIR"
+
+          export PATH=$CLANG_DIR:$PATH
+
+          which clang
+          clang --version
+
+          echo "PATH=$PATH" >> $GITHUB_ENV
 
       - name: Build Kernel
         working-directory: kernel
@@ -51,10 +67,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
 
-          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang -type f -name clang | head -1)
-
-          export PATH=$(dirname $CLANG_BIN):$PATH
-
+          which clang
           clang --version
 
           make O=out vendor/munch_defconfig
