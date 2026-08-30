@@ -76,25 +76,22 @@ jobs:
 
           echo "PATH=$PATH" >> $GITHUB_ENV
 
-      - name: Build Kernel
-        run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          
-          which clang
-          clang --version
-          
-          make O=out vendor/munch_defconfig
-          
-          make -j$(nproc) \
-            O=out \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            ARCH=arm64 \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+    - name: Build Kernel
+      working-directory: kernel
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+    
+        make O=out vendor/munch_defconfig
+    
+        make -j$(nproc) \
+          O=out \
+          CC=clang \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
       - name: Clone AnyKernel3
         run: |
