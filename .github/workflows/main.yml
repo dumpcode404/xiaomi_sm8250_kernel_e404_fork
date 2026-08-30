@@ -114,8 +114,16 @@ jobs:
 
           zip -r9 "../${ZIP_NAME}" META-INF tools MUNCH-* anykernel.sh
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: E404-Kernel
-          path: E404-Kernel.zip
+        - name: Verify ZIP
+          run: |
+            echo "Current dir:"
+            pwd
+            echo
+            find . -name "*.zip"
+          
+        - name: Upload Artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: E404-Kernel
+            path: |
+              RE404-*.zip
