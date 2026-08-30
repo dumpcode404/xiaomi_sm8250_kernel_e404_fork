@@ -35,7 +35,11 @@ jobs:
             libssl-dev \
             lld \
             python3 \
-            zstd
+            zstd \
+            gcc-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu
+            gcc-arm-linux-gnueabi
+            binutils-arm-linux-gnueabi
 
       - name: Download Neutron Clang
         run: |
@@ -62,21 +66,22 @@ jobs:
           echo "PATH=$PATH" >> $GITHUB_ENV
 
       - name: Build Kernel
-        working-directory: kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-
+          
           which clang
           clang --version
-
+          
           make O=out vendor/munch_defconfig
-
+          
           make -j$(nproc) \
             O=out \
             CC=clang \
             LLVM=1 \
-            LLVM_IAS=1
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
       - name: Clone AnyKernel3
         run: |
