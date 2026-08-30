@@ -36,9 +36,9 @@ jobs:
             lld \
             python3 \
             zstd \
-            gcc-aarch64-linux-gnu
-            binutils-aarch64-linux-gnu
-            gcc-arm-linux-gnueabi
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
             binutils-arm-linux-gnueabi
 
       - name: Download Neutron Clang
