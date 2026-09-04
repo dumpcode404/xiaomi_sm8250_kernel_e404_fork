@@ -2,6 +2,7 @@
  * BQ2560x battery charging driver
  *
  * Copyright (C) 2013 Texas Instruments
+ * Copyright (C) 2021 XiaoMi, Inc.
  *
  * This package is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as

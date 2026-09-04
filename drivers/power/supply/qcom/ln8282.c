@@ -2,6 +2,7 @@
  * Driver (skeleton code) for LIONSEMI LN8282 SC Voltage Regulator
  *
  * Copyright (C) 2019 Lion Semiconductor Inc.
+ * Copyright (C) 2021 XiaoMi, Inc.
  *
  * Author: Jae Lee <kjaelee@lionsemi.com>
  *

@@ -391,12 +391,12 @@ static int msm_hsphy_init(struct usb_phy *uphy)
 	msm_usb_write_readback(phy->base, USB2_PHY_USB_PHY_HS_PHY_CTRL1,
 				VBUSVLDEXT0, VBUSVLDEXT0);
 
-	/* set parameter override if needed */
+	/* set parameter ovrride  if needed */
 	if (phy->param_override_seq)
 		hsusb_phy_write_seq(phy->base, phy->param_override_seq,
 				phy->param_override_seq_cnt, 0);
 
-	/* set parameter override if needed */
+	/* set parameter ovrride  if needed */
 	if (phy->hw_country == (uint32_t)CountryGlobal
 			&& phy->global_param_override_seq)
 		hsusb_phy_write_seq(phy->base, phy->global_param_override_seq,
@@ -666,6 +666,7 @@ static int msm_hsphy_dpdm_regulator_disable(struct regulator_dev *rdev)
 			 * and avoid extra current consumption.
 			 */
 			msm_hsphy_reset(phy);
+			msm_hsphy_enable_clocks(phy, false);
 			ret = msm_hsphy_enable_power(phy, false);
 			if (ret < 0) {
 				mutex_unlock(&phy->phy_lock);
@@ -902,7 +903,7 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 	}
 
 	phy->hw_country = get_hw_country_version();
-	dev_info(dev, "phy hw_country: %d\n", phy->hw_country);
+	dev_err(dev, "phy hw_country: %d\n", phy->hw_country);
 
 	mutex_init(&phy->phy_lock);
 	platform_set_drvdata(pdev, phy);

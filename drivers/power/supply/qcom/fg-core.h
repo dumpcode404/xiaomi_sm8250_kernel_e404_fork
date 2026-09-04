@@ -102,7 +102,8 @@
 
 #define CRITICAL_HIGH_TEMP			580
 #define FFC_WARM_THRE 				480
-#define FFC_COLD_THRE 				 150
+#define FFC_COLD_THRE 				150
+
 enum prof_load_status {
 	PROFILE_MISSING,
 	PROFILE_LOADED,

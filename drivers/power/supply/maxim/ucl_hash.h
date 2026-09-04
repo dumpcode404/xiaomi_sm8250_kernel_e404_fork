@@ -50,4 +50,4 @@
 #define MAX_HASH_FUNCTIONS 3
 
 extern int hash_size[MAX_HASH_FUNCTIONS];
-#endif//UCL_HASH
+#endif //UCL_HASH

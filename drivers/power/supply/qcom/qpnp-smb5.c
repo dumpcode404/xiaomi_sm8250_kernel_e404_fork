@@ -25,6 +25,11 @@
 #include "step-chg-jeita.h"
 #include "schgm-flash.h"
 
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
+
 static struct smb_params smb5_pmi632_params = {
 	.fcc			= {
 		.name   = "fast charge current",
@@ -232,7 +237,7 @@ struct smb5 {
 
 static struct smb_charger *__smbchg;
 
-static int __debug_mask = PR_MISC | PR_WLS | PR_OEM | PR_PARALLEL;
+static int __debug_mask = 0;
 
 static ssize_t pd_disabled_show(struct device *dev, struct device_attribute
 				*attr, char *buf)
@@ -1510,7 +1515,7 @@ static int smb5_usb_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 		if (smblib_get_fastcharge_mode(chg))
-    #if defined(CONFIG_BOARD_CAS) || defined(CONFIG_BOARD_MUNCH)
+    	#if defined(CONFIG_BOARD_CAS) || defined(CONFIG_BOARD_MUNCH)
 			val->intval = 12000000;
 	#elif defined CONFIG_BOARD_CMI
 			val->intval = 10000000;
@@ -1803,10 +1808,10 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_FASTCHARGE_MODE:
 		rc = smblib_set_fastcharge_mode(chg, val->intval);
 		power_supply_changed(chg->usb_psy);
-		schedule_delayed_work(&chg->report_soc_decimal_work,
+		queue_delayed_work(system_power_efficient_wq, &chg->report_soc_decimal_work,
 				msecs_to_jiffies(REPORT_SOC_DECIMAL_MS));
 		if (chg->ext_fg && chg->step_chg_enabled)
-			schedule_delayed_work(&chg->step_charge_notify_work,
+			queue_delayed_work(system_power_efficient_wq, &chg->step_charge_notify_work,
 					msecs_to_jiffies(2000));
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -1930,7 +1935,7 @@ static int smb5_usb_port_get_prop(struct power_supply *psy,
 		rc = smblib_get_prop_input_current_settled(chg, val);
 		break;
 	default:
-		pr_err_ratelimited("Get prop %d is not supported in pc_port\n",
+		pr_err("Get prop %d is not supported in pc_port\n",
 				psp);
 		return -EINVAL;
 	}
@@ -1951,7 +1956,7 @@ static int smb5_usb_port_set_prop(struct power_supply *psy,
 
 	switch (psp) {
 	default:
-		pr_err_ratelimited("Set prop %d is not supported in pc_port\n",
+		pr_err("Set prop %d is not supported in pc_port\n",
 				psp);
 		rc = -EINVAL;
 		break;
@@ -2072,6 +2077,10 @@ static int smb5_usb_main_get_prop(struct power_supply *psy,
 		break;
 	/* Use this property to report SMB health */
 	case POWER_SUPPLY_PROP_HEALTH:
+		if (chg->use_bq_pump) {
+			rc = val->intval = -ENODATA;
+			break;
+		}
 		rc = val->intval = smblib_get_prop_smb_health(chg);
 		break;
 	/* Use this property to report overheat status */
@@ -4033,7 +4042,7 @@ static int smb5_init_connector_type(struct smb_charger *chg)
 	}
 
 	smblib_rerun_apsd_if_required(chg);
-
+	
 	return 0;
 
 }
@@ -4997,7 +5006,6 @@ static int smb5_probe(struct platform_device *pdev)
 	chg->thermal_fcc_override = 0;
 	chg->pd_disabled = 0;
 	chg->apdo_max = 0;
-	chg->quick_charge_type_info = 0;
 	chg->weak_chg_icl_ua = 500000;
 	chg->mode = PARALLEL_MASTER;
 	chg->irq_info = smb5_irqs;
@@ -5195,7 +5203,7 @@ static int smb5_probe(struct platform_device *pdev)
 		goto free_irq;
 	}
 
-	schedule_delayed_work(&chg->reg_work, 30 * HZ);
+	queue_delayed_work(system_power_efficient_wq, &chg->reg_work, 30 * HZ);
 	pr_info("QPNP SMB5 probed successfully\n");
 
 	return rc;
@@ -5233,9 +5241,6 @@ static void smb5_shutdown(struct platform_device *pdev)
 
 	/* disable all interrupts */
 	smb5_disable_interrupts(chg);
-
-	/* disable VBUS regulator */
-	smblib_masked_write(chg, DCDC_CMD_OTG_REG, OTG_EN_BIT, 0);
 
 	/* disable the SMB_EN configuration */
 	smblib_masked_write(chg, MISC_SMB_EN_CMD_REG, EN_CP_CMD_BIT, 0);

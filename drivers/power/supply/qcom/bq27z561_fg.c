@@ -13,7 +13,7 @@
  * GNU General Public License for more details.
  */
 
-#define pr_fmt(fmt)	"[bq27z561] %s: " fmt, __func__
+#define pr_fmt(fmt)
 #include <linux/module.h>
 #include <linux/param.h>
 #include <linux/jiffies.h>
@@ -39,7 +39,7 @@ enum print_reason {
 	PR_DEBUG	= BIT(3),
 };
 
-static int debug_mask = PR_OEM;
+static int debug_mask = 0;
 module_param_named(
 	debug_mask, debug_mask, int, 0600
 );
@@ -2435,7 +2435,6 @@ static int calc_delta_time(ktime_t time_last, int *delta_time)
 #define LOW_TEMP_CHARGING_DELTA		10000
 #define LOW_TEMP_DISCHARGING_DELTA	20000
 #define FFC_SMOOTH_LEN			4
-#define SMOOTH_VOLT_LEN         4
 #define FG_RAW_SOC_FULL			10000
 #define FG_REPORT_FULL_SOC_PHONE	9400
 #define FG_REPORT_FULL_SOC_DEVICE	9500
@@ -2452,18 +2451,6 @@ struct ffc_smooth ffc_dischg_smooth[FFC_SMOOTH_LEN] = {
 	{300,  150000},
 	{600,   72000},
 	{1000,  50000},
-};
-
-struct LowSoc_HighVolt_Smooth{
-	int volt_lim;
-	int time;
-};
-
-struct LowSoc_HighVolt_Smooth lowsoc_highvolt_smooth[SMOOTH_VOLT_LEN] = {
-	{0,    10000},
-	{3400, 30000},
-	{3500, 45000},
-	{3600, 60000},
 };
 
 static int bq_battery_soc_smooth_tracking(struct bq_fg_chip *bq,
@@ -2486,7 +2473,6 @@ static int bq_battery_soc_smooth_tracking(struct bq_fg_chip *bq,
 	static int last_raw_soc[FG_MAX_INDEX];
 	union power_supply_propval pval = {0, };
 	int batt_ma_avg, i;
-	int batt_mv;
 
 	if (bq->optimiz_soc > 0) {
 		bq->ffc_smooth = true;
@@ -2590,18 +2576,6 @@ static int bq_battery_soc_smooth_tracking(struct bq_fg_chip *bq,
 		else
 			cold_smooth[bq->fg_index] = false;
 	}
-
-	//increase unit_time when low power but high voltage, to prevent cliff fall when low power but high voltage
-	if(raw_soc == 0 && bq->last_soc > 1){
-		batt_mv = fg_read_volt(bq);
-		for(i = SMOOTH_VOLT_LEN; i > 0; i--){
-			if(batt_mv > lowsoc_highvolt_smooth[i-1].volt_lim){
-				unit_time = lowsoc_highvolt_smooth[i-1].time;
-				break;
-			}
-		}
-	}	
-
 	if (unit_time > 0) {
 		delta_time = change_delta / unit_time;
 		soc_changed = min(1, delta_time);
@@ -2682,7 +2656,7 @@ static void fg_monitor_workfunc(struct work_struct *work)
 		fg_update_charge_full(bq);
 	}
 
-	schedule_delayed_work(&bq->monitor_work, period * HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work, period * HZ);
 }
 static int bq_parse_dt(struct bq_fg_chip *bq)
 {
@@ -2845,7 +2819,7 @@ static int bq_fg_probe(struct i2c_client *client,
 		bq_dbg(PR_OEM, "Failed to register sysfs, err:%d\n", ret);
 
 	INIT_DELAYED_WORK(&bq->monitor_work, fg_monitor_workfunc);
-	schedule_delayed_work(&bq->monitor_work,10 * HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work,10 * HZ);
 
 	bq_dbg(PR_OEM, "bq fuel gauge probe successfully, %s\n",
 			device2str[bq->chip]);
@@ -2882,7 +2856,7 @@ static int bq_fg_resume(struct device *dev)
 		bq->update_now = true;
 	}
 
-	schedule_delayed_work(&bq->monitor_work, HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work, HZ);
 
 	return 0;
 }

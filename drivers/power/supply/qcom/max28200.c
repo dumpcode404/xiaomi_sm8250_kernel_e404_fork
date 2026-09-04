@@ -2,6 +2,7 @@
  * max28200 charger pump watch dog driver
  *
  * Copyright (C) 2017 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2021 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License version 2 as
@@ -39,7 +40,7 @@ enum print_reason {
 	PR_DEBUG	= BIT(3),
 };
 
-static int debug_mask = PR_OEM;
+static int debug_mask = 0;
 
 module_param_named(
 		debug_mask, debug_mask, int, 0600
@@ -93,7 +94,7 @@ static bool max28200_set_watchdog_enable(struct max28200_chip *max, bool enable)
 			max_dbg(PR_OEM, "unable to update p00 reg");
 			return rc;
 		}
-		schedule_delayed_work(&max->monitor_work, 10 * HZ);
+		queue_delayed_work(system_power_efficient_wq, &max->monitor_work, 10 * HZ);
 	}
 
 	max->enabled = enable;
@@ -228,7 +229,7 @@ static void max28200_monitor_workfunc(struct work_struct *work)
 	struct max28200_chip *max = container_of(work,
 			struct max28200_chip, monitor_work.work);
 
-	schedule_delayed_work(&max->monitor_work, 10 * HZ);
+	queue_delayed_work(system_power_efficient_wq, &max->monitor_work, 10 * HZ);
 }
 
 static int max_parse_dt(struct max28200_chip *max)

@@ -4,7 +4,7 @@
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
-#define pr_fmt(fmt)	"FG: %s: " fmt, __func__
+#define pr_fmt(fmt)
 
 #include <linux/alarmtimer.h>
 #include <linux/irq.h>
@@ -23,6 +23,15 @@
 #include "fg-alg.h"
 /* add for get hw country */
 #include <soc/qcom/socinfo.h>
+
+#ifdef CONFIG_E404_ATTRIBUTES
+#include <linux/e404_attributes.h>
+#endif
+
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
 
 #define FG_GEN4_DEV_NAME	"qcom,fg-gen4"
 #define TTF_AWAKE_VOTER		"fg_ttf_awake"
@@ -358,7 +367,7 @@ struct bias_config {
 	int	bias_kohms;
 };
 
-static int fg_gen4_debug_mask = FG_STATUS | FG_FVSS | FG_POWER_SUPPLY;
+static int fg_gen4_debug_mask = 0;
 
 static bool is_batt_vendor_gyb;
 static bool is_batt_vendor_nvt;
@@ -1091,7 +1100,6 @@ static int fg_gen4_get_prop_capacity_raw(struct fg_gen4_chip *chip, int *val)
 
 	return 0;
 }
-
 
 static int fg_gen4_get_prop_soc_decimal_rate(struct fg_gen4_chip *chip, int *val)
 {
@@ -2097,6 +2105,22 @@ static int fg_gen4_get_batt_profile(struct fg_dev *fg)
 	} else {
 #ifdef CONFIG_BATT_VERIFY_BY_DS28E16
 		profile_node = ERR_PTR(-ENXIO);
+
+#ifdef CONFIG_E404_ATTRIBUTES
+		/* force alioth to load 5000mah profile if user wanted */
+		if (e404_data.batt_profile == 2) {
+			if (of_property_read_bool(node, "qcom,j3s-batt-profile") && !fg->profile_already_find) {
+				pr_alert("E404: forcing j3ssun_5000mah profile\n");
+				fg->profile_already_find = true;
+				/* Avoid retry queueing if verify/retry path exists */
+            	retry_batt_profile = BATT_PROFILE_RETRY_COUNT_MAX;
+				profile_node = of_batterydata_get_best_profile(batt_node,
+									fg->batt_id_ohms / 1000,
+									"j3ssun_5000mah");
+			}
+		}
+#endif
+
 		/* if cmdline battery profile vendor is passed to fg driver, use cmdline result */
 		if (is_batt_vendor_gyb && !fg->profile_already_find) {
 			pr_err("is_batt_vendor_gyb is %d\n", is_batt_vendor_gyb);
@@ -2125,13 +2149,6 @@ static int fg_gen4_get_batt_profile(struct fg_dev *fg)
 			} else if ((chip->ds_page0[0] == 'N') || (chip->ds_page0[0] == 'A')) {
 				profile_node = of_batterydata_get_best_profile(batt_node,
 					fg->batt_id_ohms / 1000, "j2nvtbm4n_4780mah");
-			} else if ((chip->ds_page0[0] == 'S') || (chip->ds_page0[0] == 'X')) {
-				if (chip->dt.j3s_batt_profile)
-					profile_node = of_batterydata_get_best_profile(batt_node,
-						fg->batt_id_ohms / 1000, "j3ssun_5000mah");
-				else
-					profile_node = of_batterydata_get_best_profile(batt_node,
-						fg->batt_id_ohms / 1000, "j11sun_4700mah");
 			} else if (chip->ds_page0[0] == 'U') {
 				if (chip->dt.k11a_batt_profile)
 					profile_node = of_batterydata_get_best_profile(batt_node,
@@ -2139,6 +2156,13 @@ static int fg_gen4_get_batt_profile(struct fg_dev *fg)
 				else
 					profile_node = of_batterydata_get_best_profile(batt_node,
 							fg->batt_id_ohms / 1000, "K11A_FMT_4520mah");
+			} else if ((chip->ds_page0[0] == 'S') || (chip->ds_page0[0] == 'X')) {
+				if (chip->dt.j3s_batt_profile)
+					profile_node = of_batterydata_get_best_profile(batt_node,
+						fg->batt_id_ohms / 1000, "j3ssun_5000mah");
+				else
+					profile_node = of_batterydata_get_best_profile(batt_node,
+						fg->batt_id_ohms / 1000, "j11sun_4700mah");
 			}  else {
 				retry_batt_profile++;
 			}
@@ -2151,7 +2175,7 @@ static int fg_gen4_get_batt_profile(struct fg_dev *fg)
 			if (profile_node == ERR_PTR(-ENXIO)) {
 				pr_warn("verifty battery fail. recheck after, retry:%d\n",
 					retry_batt_profile);
-				schedule_delayed_work(&fg->profile_load_work, 500);
+				queue_delayed_work(system_power_efficient_wq, &fg->profile_load_work, 500);
 			}
 		} else if (!fg->profile_already_find) {
 			if (!chip->dt.sun_profile_only) {
@@ -2159,14 +2183,14 @@ static int fg_gen4_get_batt_profile(struct fg_dev *fg)
 				profile_node = of_batterydata_get_best_profile(batt_node,
 						fg->batt_id_ohms / 1000, "j2gybm4n_4780mah");
 			} else {
-				if (chip->dt.j3s_batt_profile) {
-					pr_warn("verifty battery fail. use default profile j3ssun_5000mah\n");
-					profile_node = of_batterydata_get_best_profile(batt_node,
-						fg->batt_id_ohms / 1000, "j3ssun_5000mah");
-				} else if (chip->dt.k11a_batt_profile) {
+				if (chip->dt.k11a_batt_profile) {
 					pr_warn("verifty battery fail. use default profile k11a_fmt_4520mah\n");
 					profile_node = of_batterydata_get_best_profile(batt_node,
 						fg->batt_id_ohms / 1000, "K11A_FMT_4520mah");
+				} else if (chip->dt.j3s_batt_profile) {
+					pr_warn("verifty battery fail. use default profile j3ssun_5000mah\n");
+					profile_node = of_batterydata_get_best_profile(batt_node,
+						fg->batt_id_ohms / 1000, "j3ssun_5000mah");
 				} else {
 					pr_warn("verifty battery fail. use default profile j11sun_4700mah\n");
 					profile_node = of_batterydata_get_best_profile(batt_node,
@@ -2438,7 +2462,6 @@ static bool is_profile_load_required(struct fg_gen4_chip *chip)
 			fg->profile_load_status = PROFILE_SKIPPED;
 			return false;
 		}
-
 		profiles_same = memcmp(chip->batt_profile, buf,
 					PROFILE_COMP_LEN) == 0;
 		if (profiles_same) {
@@ -2790,7 +2813,7 @@ done:
 	batt_psy_initialized(fg);
 	fg_notify_charger(fg);
 	power_supply_changed(fg->fg_psy);
-	schedule_delayed_work(&chip->ttf->ttf_work, msecs_to_jiffies(10000));
+	mod_delayed_work(system_freezable_power_efficient_wq, &chip->ttf->ttf_work, msecs_to_jiffies(10000));
 	fg_dbg(fg, FG_STATUS, "profile loaded successfully");
 out:
 	if (!chip->esr_fast_calib || is_debug_batt_id(fg)) {
@@ -2803,10 +2826,10 @@ out:
 		chip->batt_age_level = chip->last_batt_age_level;
 	fg->soc_reporting_ready = true;
 	vote(fg->awake_votable, ESR_FCC_VOTER, true, 0);
-	schedule_delayed_work(&chip->pl_enable_work, msecs_to_jiffies(5000));
+	mod_delayed_work(system_freezable_power_efficient_wq, &chip->pl_enable_work, msecs_to_jiffies(5000));
 	vote(fg->awake_votable, PROFILE_LOAD, false, 0);
 	if (!work_pending(&fg->status_change_work)) {
-		pm_stay_awake(fg->dev);
+		pm_wakeup_event(fg->dev, 0);
 		schedule_work(&fg->status_change_work);
 	}
 
@@ -3591,7 +3614,6 @@ static int fg_gen4_validate_soc_scale_mode(struct fg_gen4_chip *chip)
 		vbatt_scale_mv = 3400;
 	else
 		vbatt_scale_mv = chip->dt.vbatt_scale_thr_mv;
-	pr_info("get vbatt_scale_mv = %d, current now = %d\n", vbatt_scale_mv, chip->current_now);
 	if (!chip->soc_scale_mode && fg->charge_status ==
 		POWER_SUPPLY_STATUS_DISCHARGING &&
 		chip->current_now  > 0 &&
@@ -3845,7 +3867,7 @@ static irqreturn_t fg_batt_missing_irq_handler(int irq, void *data)
 	}
 
 	clear_battery_profile(fg);
-	schedule_delayed_work(&fg->profile_load_work, 0);
+	mod_delayed_work(system_freezable_power_efficient_wq, &fg->profile_load_work, 0);
 
 	if (fg->fg_psy)
 		power_supply_changed(fg->fg_psy);
@@ -4160,7 +4182,7 @@ static enum alarmtimer_restart fg_esr_fast_cal_timer(struct alarm *alarm,
 		 * We cannot vote for awake votable here as that takes
 		 * a mutex lock and this is executed in an atomic context.
 		 */
-		pm_stay_awake(fg->dev);
+		pm_wakeup_event(fg->dev, 0);
 		chip->esr_fast_cal_timer_expired = true;
 		schedule_work(&chip->esr_calib_work);
 	}
@@ -4412,7 +4434,6 @@ static void soc_scale_work(struct work_struct *work)
 		if (delta_time < 0)
 			delta_time = 0;
 		soc_changed = min(1, delta_time);
-		fg_dbg(fg, FG_FVSS, "get delta_time = %d, soc_changed =%d, time_since_last_change_sec = %d\n", delta_time, soc_changed, time_since_last_change_sec);
 
 		chip->soc_scale_msoc = chip->prev_soc_scale_msoc - soc_changed;
 		chip->scale_timer = chip->dt.scale_timer_ms /
@@ -4493,7 +4514,7 @@ static void battery_authentic_work(struct work_struct *work)
 		retry_battery_authentic_result++;
 		if (retry_battery_authentic_result < BATTERY_AUTHENTIC_COUNT_MAX) {
 			pr_err("battery authentic work begin to restart.\n");
-			schedule_delayed_work(&chip->battery_authentic_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->battery_authentic_work,
 				msecs_to_jiffies(battery_authentic_period_ms));
 		}
 
@@ -4502,11 +4523,11 @@ static void battery_authentic_work(struct work_struct *work)
 		}
 	} else {
 		pr_err("FG: authentic prop is %d\n", pval.intval);
-		schedule_delayed_work(&chip->ds_romid_work,
+		queue_delayed_work(system_power_efficient_wq, &chip->ds_romid_work,
 				msecs_to_jiffies(0));
-		schedule_delayed_work(&chip->ds_status_work,
+		queue_delayed_work(system_power_efficient_wq, &chip->ds_status_work,
 				msecs_to_jiffies(500));
-		schedule_delayed_work(&chip->ds_page0_work,
+		queue_delayed_work(system_power_efficient_wq, &chip->ds_page0_work,
 				msecs_to_jiffies(1000));
 	}
 }
@@ -4531,7 +4552,7 @@ static void ds_romid_work(struct work_struct *work)
 		retry_ds_romid++;
 		if (retry_ds_romid < DS_ROMID_COUNT_MAX) {
 			pr_err("battery authentic work begin to restart.\n");
-			schedule_delayed_work(&chip->ds_romid_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->ds_romid_work,
 				msecs_to_jiffies(ds_romid_period_ms));
 		}
 
@@ -4567,7 +4588,7 @@ static void ds_status_work(struct work_struct *work)
 		retry_ds_status++;
 		if (retry_ds_status < DS_STATUS_COUNT_MAX) {
 			pr_err("battery authentic work begin to restart.\n");
-			schedule_delayed_work(&chip->ds_status_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->ds_status_work,
 				msecs_to_jiffies(ds_status_period_ms));
 		}
 
@@ -4603,7 +4624,7 @@ static void ds_page0_work(struct work_struct *work)
 		retry_ds_page0++;
 		if (retry_ds_page0 < DS_PAGE0_COUNT_MAX) {
 			pr_err("battery authentic work begin to restart.\n");
-			schedule_delayed_work(&chip->ds_page0_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->ds_page0_work,
 				msecs_to_jiffies(ds_page0_period_ms));
 		}
 
@@ -4813,7 +4834,7 @@ static void sram_dump_work(struct work_struct *work)
 	fg_dbg(fg, FG_STATUS, "SRAM Dump done at %lld.%d\n",
 		quotient, remainder);
 resched:
-	schedule_delayed_work(&fg->sram_dump_work,
+	mod_delayed_work(system_freezable_power_efficient_wq, &fg->sram_dump_work,
 			msecs_to_jiffies(fg_sram_dump_period_ms));
 }
 
@@ -4852,7 +4873,7 @@ static ssize_t sram_dump_en_store(struct device *dev, struct device_attribute
 	}
 
 	if (fg_sram_dump)
-		schedule_delayed_work(&fg->sram_dump_work,
+		mod_delayed_work(system_freezable_power_efficient_wq, &fg->sram_dump_work,
 				msecs_to_jiffies(fg_sram_dump_period_ms));
 	else
 		cancel_delayed_work_sync(&fg->sram_dump_work);
@@ -5297,7 +5318,11 @@ static int fg_psy_get_property(struct power_supply *psy,
 		rc = fg_gen4_get_charge_counter_shadow(chip, &pval->intval);
 		break;
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+		pval->intval = fg->maxim_cycle_count;
+#else
 		rc = get_cycle_count(chip->counter, &pval->intval);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CYCLE_COUNTS:
 		rc = get_cycle_counts(chip->counter, &pval->strval);
@@ -5379,7 +5404,7 @@ static int fg_psy_get_property(struct power_supply *psy,
 		pval->intval = chip->dt.ffc_ki_coeff_med_hi_chg_thr_ma;
 		break;
 	default:
-		pr_debug("unsupported property %d\n", psp);
+		pr_err("unsupported property %d\n", psp);
 		rc = -EINVAL;
 		break;
 	}
@@ -5470,7 +5495,7 @@ static int fg_psy_set_property(struct power_supply *psy,
 			return -EINVAL;
 		chip->last_batt_age_level = chip->batt_age_level;
 		chip->batt_age_level = pval->intval;
-		schedule_delayed_work(&fg->profile_load_work, 0);
+		mod_delayed_work(system_freezable_power_efficient_wq, &fg->profile_load_work, 0);
 		break;
 	case POWER_SUPPLY_PROP_CALIBRATE:
 		rc = fg_gen4_set_calibrate_level(chip, pval->intval);
@@ -5625,7 +5650,7 @@ static int fg_notifier_cb(struct notifier_block *nb,
 		 * We cannot vote for awake votable here as that takes
 		 * a mutex lock and this is executed in an atomic context.
 		 */
-		pm_stay_awake(fg->dev);
+		pm_wakeup_event(fg->dev, 0);
 		schedule_work(&fg->status_change_work);
 	}
 
@@ -5638,7 +5663,7 @@ static int fg_awake_cb(struct votable *votable, void *data, int awake,
 	struct fg_dev *fg = data;
 
 	if (awake)
-		pm_stay_awake(fg->dev);
+		pm_wakeup_event(fg->dev, 0);
 	else
 		pm_relax(fg->dev);
 
@@ -7013,21 +7038,6 @@ static int fg_gen4_parse_dt(struct fg_gen4_chip *chip)
 //#define FFC_SYS_TERMI_CURRENT -1280000
 static int scale_count;
 extern bool off_charge_flag;
-
-#define SMOOTH_VOLT_LEN         4
-
-struct LowSoc_HighVolt_Smooth{
-	int volt_lim;
-	int time;
-};
-
-struct LowSoc_HighVolt_Smooth lowsoc_highvolt_smooth[SMOOTH_VOLT_LEN] = {
-	{0,    10},
-	{3400, 30},
-	{3500, 45},
-	{3600, 60},
-};
-
 static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 {
 	struct fg_dev *fg = &chip->fg;
@@ -7036,7 +7046,6 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 	int last_batt_soc = fg->param.batt_soc;
 	int time_since_last_change_sec;
 	int last_smooth_batt_soc = fg->param.smooth_batt_soc;
-	int i;
 
 	struct timespec last_change_time = fg->param.last_soc_change_time;
 
@@ -7064,17 +7073,6 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 		else
 			delta_time = time_since_last_change_sec / 20;
 	}
-
-	//increase unit_time when low power but high voltage, to prevent cliff fall when low power but high voltage
-	if(fg->param.batt_raw_soc == 0 && last_batt_soc > 1){
-		for(i = SMOOTH_VOLT_LEN; i > 0; i--){
-			if(fg->param.batt_mv > lowsoc_highvolt_smooth[i-1].volt_lim){
-				delta_time = time_since_last_change_sec / lowsoc_highvolt_smooth[i-1].time;
-				break;
-			}
-		}
-	}	
-
 
 	if (delta_time < 0)
 		delta_time = 0;
@@ -7224,10 +7222,10 @@ static void empty_restart_fg_work(struct work_struct *work)
 			if (batt_psy_initialized(fg))
 				power_supply_changed(fg->batt_psy);
 			cancel_delayed_work_sync(&fg->soc_monitor_work);
-			schedule_delayed_work(&fg->soc_monitor_work,
+			queue_delayed_work(system_power_efficient_wq, &fg->soc_monitor_work,
 				msecs_to_jiffies(RESTART_FG_MONITOR_SOC_WAIT_PER_MS));
 		} else {
-			schedule_delayed_work(
+			mod_delayed_work(system_freezable_power_efficient_wq, 
 					&fg->empty_restart_fg_work,
 					msecs_to_jiffies(RESTART_FG_WORK_MS));
 		}
@@ -7300,13 +7298,13 @@ static void soc_monitor_work(struct work_struct *work)
 
 	if (chip->dt.fg_increase_100soc_time) {
 		if (!fg->soc_reporting_ready)
-			schedule_delayed_work(&fg->soc_monitor_work,
+			queue_delayed_work(system_power_efficient_wq, &fg->soc_monitor_work,
 				msecs_to_jiffies(MONITOR_SOC_WAIT_READY));
 		else
-			schedule_delayed_work(&fg->soc_monitor_work,
+			queue_delayed_work(system_power_efficient_wq, &fg->soc_monitor_work,
 				msecs_to_jiffies(MONITOR_SOC_WAIT_PER_MS));
 	} else {
-		schedule_delayed_work(&fg->soc_monitor_work,
+		queue_delayed_work(system_power_efficient_wq, &fg->soc_monitor_work,
 			msecs_to_jiffies(MONITOR_SOC_WAIT_PER_MS));
 	}
 }
@@ -7436,9 +7434,9 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	INIT_WORK(&fg->status_change_work, status_change_work);
 	INIT_WORK(&chip->esr_calib_work, esr_calib_work);
 	INIT_WORK(&chip->soc_scale_work, soc_scale_work);
-	INIT_DELAYED_WORK(&fg->profile_load_work, profile_load_work);
-	INIT_DELAYED_WORK(&fg->sram_dump_work, sram_dump_work);
-	INIT_DELAYED_WORK(&chip->pl_enable_work, pl_enable_work);
+	INIT_DEFERRABLE_WORK(&fg->profile_load_work, profile_load_work);
+	INIT_DEFERRABLE_WORK(&fg->sram_dump_work, sram_dump_work);
+	INIT_DEFERRABLE_WORK(&chip->pl_enable_work, pl_enable_work);
 	INIT_WORK(&chip->pl_current_en_work, pl_current_en_work);
 	INIT_DELAYED_WORK(&fg->soc_monitor_work, soc_monitor_work);
 	INIT_DELAYED_WORK(&fg->empty_restart_fg_work, empty_restart_fg_work);
@@ -7502,7 +7500,6 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	}
 
 	chip->hw_country = get_hw_country_version();
-	dev_err(fg->dev, "hw_country: %d\n", chip->hw_country);
 
 	rc = fg_gen4_parse_dt(chip);
 	if (rc < 0) {
@@ -7563,7 +7560,7 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	}
 #ifdef CONFIG_BATT_VERIFY_BY_DS28E16
 	if (chip->battery_authentic_result != true) {
-		schedule_delayed_work(&chip->battery_authentic_work,
+		queue_delayed_work(system_power_efficient_wq, &chip->battery_authentic_work,
 				msecs_to_jiffies(0));
 	}
 #endif
@@ -7631,15 +7628,13 @@ static int fg_gen4_probe(struct platform_device *pdev)
 
 	device_init_wakeup(fg->dev, true);
 	if (!fg->battery_missing)
-		schedule_delayed_work(&fg->profile_load_work, 0);
+		mod_delayed_work(system_freezable_power_efficient_wq, &fg->profile_load_work, 0);
 
 	fg_gen4_post_init(chip);
 	if (chip->dt.fg_increase_100soc_time) {
-		schedule_delayed_work(&fg->soc_monitor_work,
-			msecs_to_jiffies(0));
+        mod_delayed_work(system_freezable_power_efficient_wq, &fg->soc_monitor_work, msecs_to_jiffies(0));
 	} else {
-		schedule_delayed_work(&fg->soc_monitor_work,
-			msecs_to_jiffies(5*MONITOR_SOC_WAIT_MS));
+        mod_delayed_work(system_freezable_power_efficient_wq, &fg->soc_monitor_work, msecs_to_jiffies(5*MONITOR_SOC_WAIT_MS));
 	}
 
 	/*
@@ -7650,7 +7645,7 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	 */
 	if ((volt_uv >= VBAT_RESTART_FG_EMPTY_UV)
 			&& (msoc == 0) && (batt_temp >= TEMP_THR_RESTART_FG))
-		schedule_delayed_work(&fg->empty_restart_fg_work,
+		mod_delayed_work(system_freezable_power_efficient_wq, &fg->empty_restart_fg_work,
 				msecs_to_jiffies(RESTART_FG_START_WORK_MS));
 	pr_debug("FG GEN4 driver probed successfully\n");
 	return 0;
@@ -7733,12 +7728,12 @@ static int fg_gen4_resume(struct device *dev)
 	struct fg_gen4_chip *chip = dev_get_drvdata(dev);
 	struct fg_dev *fg = &chip->fg;
 
-	schedule_delayed_work(&chip->ttf->ttf_work, 0);
+	mod_delayed_work(system_freezable_power_efficient_wq, &chip->ttf->ttf_work, 0);
 	if (fg_sram_dump)
-		schedule_delayed_work(&fg->sram_dump_work,
+		mod_delayed_work(system_freezable_power_efficient_wq, &fg->sram_dump_work,
 				msecs_to_jiffies(fg_sram_dump_period_ms));
 
-	schedule_delayed_work(&fg->soc_monitor_work,
+	queue_delayed_work(system_power_efficient_wq, &fg->soc_monitor_work,
 				msecs_to_jiffies(MONITOR_SOC_WAIT_MS));
 	return 0;
 }
