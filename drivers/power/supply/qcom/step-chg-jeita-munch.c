@@ -3,7 +3,7 @@
  * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
  */
 
-#define pr_fmt(fmt) "QCOM-STEPCHG: %s: " fmt, __func__
+#define pr_fmt(fmt)
 
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -17,6 +17,12 @@
 #define STEP_CHG_VOTER		"STEP_CHG_VOTER"
 #define STEP_BMS_CHG_VOTER	"STEP_BMS_CHG_VOTER"
 #define JEITA_VOTER		"JEITA_VOTER"
+
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
+
 #define is_between(left, right, value) \
 		(((left) >= (right) && (left) >= (value) \
 			&& (value) >= (right)) \
@@ -484,7 +490,7 @@ static void get_config_work(struct work_struct *work)
 	return;
 
 reschedule:
-	schedule_delayed_work(&chip->get_config_work,
+	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 }
@@ -1087,7 +1093,7 @@ static int handle_battery_insertion(struct step_chg_info *chip)
 			 * Get config for the new inserted battery, delay
 			 * to make sure BMS has read out the batt_id.
 			 */
-			schedule_delayed_work(&chip->get_config_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 				msecs_to_jiffies(WAIT_BATT_ID_READY_MS));
 		}
 	}
@@ -1183,14 +1189,14 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "battery") == 0)
 			|| (strcmp(psy->desc->name, "usb") == 0)) {
 		__pm_stay_awake(chip->step_chg_ws);
-		schedule_delayed_work(&chip->status_change_work, 0);
+		queue_delayed_work(system_power_efficient_wq, &chip->status_change_work, 0);
 	}
 
 	if ((strcmp(psy->desc->name, "bms") == 0)) {
 		if (chip->bms_psy == NULL)
 			chip->bms_psy = psy;
 		if (!chip->config_is_read)
-			schedule_delayed_work(&chip->get_config_work, 0);
+			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work, 0);
 	}
 
 	return NOTIFY_OK;
@@ -1275,7 +1281,7 @@ int qcom_step_chg_init(struct device *dev,
 		goto release_wakeup_source;
 	}
 
-	schedule_delayed_work(&chip->get_config_work,
+	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 	the_chip = chip;

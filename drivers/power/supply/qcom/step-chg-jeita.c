@@ -3,7 +3,7 @@
  * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
  */
 
-#define pr_fmt(fmt) "QCOM-STEPCHG: %s: " fmt, __func__
+#define pr_fmt(fmt)
 
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -17,6 +17,11 @@
 #define STEP_CHG_VOTER		"STEP_CHG_VOTER"
 #define STEP_BMS_CHG_VOTER	"STEP_BMS_CHG_VOTER"
 #define JEITA_VOTER		"JEITA_VOTER"
+
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
 
 #define is_between(left, right, value) \
 		(((left) >= (right) && (left) >= (value) \
@@ -485,7 +490,7 @@ static void get_config_work(struct work_struct *work)
 	return;
 
 reschedule:
-	schedule_delayed_work(&chip->get_config_work,
+	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 }
@@ -502,10 +507,8 @@ static int get_val(struct range_data *range, int hysteresis, int current_index,
 	 * If the threshold is lesser than the minimum allowed range,
 	 * return -ENODATA.
 	 */
-	if (threshold < range[0].low_threshold) {
-		pr_err("threshold is low then %d, error!\n", range[0].low_threshold);
+	if (threshold < range[0].low_threshold)
 		return -ENODATA;
-	}
 
 	/* First try to find the matching index without hysteresis */
 	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++) {
@@ -701,7 +704,7 @@ static int handle_step_chg_config(struct step_chg_info *chip)
 		vote(chip->fcc_votable, STEP_CHG_VOTER, true, fcc_ua);
 	}
 
-	pr_info("%s = %d Step-FCC = %duA taper-fcc: %d\n",
+	pr_debug("%s = %d Step-FCC = %duA taper-fcc: %d\n",
 		chip->step_chg_config->param.prop_name, pval.intval,
 		get_client_vote(chip->fcc_votable, STEP_CHG_VOTER),
 		chip->taper_fcc);
@@ -970,8 +973,6 @@ static int handle_jeita(struct step_chg_info *chip)
 	 */
 	rc = power_supply_get_property(chip->batt_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_MAX, &pval);
-	pr_info("%s = %d FCC = %duA FV = %duV %s = %d max voltage= %duv battery warm = %d battery cool = %d\n",
-		chip->jeita_fcc_config->param.prop_name, temp, fcc_ua, fv_uv, chip->jeita_fcc_config->param.prop_name, temp, pval.intval, chip->jeita_warm_th, chip->jeita_cool_th);
 	if (rc || (pval.intval == fv_uv)) {
 		vote(chip->usb_icl_votable, JEITA_VOTER, false, 0);
 		goto set_jeita_fv;
@@ -1058,7 +1059,7 @@ static int handle_battery_insertion(struct step_chg_info *chip)
 			 * Get config for the new inserted battery, delay
 			 * to make sure BMS has read out the batt_id.
 			 */
-			schedule_delayed_work(&chip->get_config_work,
+			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 				msecs_to_jiffies(WAIT_BATT_ID_READY_MS));
 		}
 	}
@@ -1115,14 +1116,14 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "battery") == 0)
 			|| (strcmp(psy->desc->name, "usb") == 0)) {
 		__pm_stay_awake(chip->step_chg_ws);
-		schedule_delayed_work(&chip->status_change_work, 0);
+		queue_delayed_work(system_power_efficient_wq, &chip->status_change_work, 0);
 	}
 
 	if ((strcmp(psy->desc->name, "bms") == 0)) {
 		if (chip->bms_psy == NULL)
 			chip->bms_psy = psy;
 		if (!chip->config_is_read)
-			schedule_delayed_work(&chip->get_config_work, 0);
+			queue_delayed_work(system_power_efficient_wq, &chip->get_config_work, 0);
 	}
 
 	return NOTIFY_OK;
@@ -1207,7 +1208,7 @@ int qcom_step_chg_init(struct device *dev,
 		goto release_wakeup_source;
 	}
 
-	schedule_delayed_work(&chip->get_config_work,
+	queue_delayed_work(system_power_efficient_wq, &chip->get_config_work,
 			msecs_to_jiffies(GET_CONFIG_DELAY_MS));
 
 	the_chip = chip;

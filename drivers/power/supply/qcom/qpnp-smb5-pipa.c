@@ -27,6 +27,11 @@
 #include <linux/reboot.h>
 #include <linux/reboot-mode.h>
 
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
+
 static struct smb_params smb5_pmi632_params = {
 	.fcc			= {
 		.name   = "fast charge current",
@@ -234,7 +239,7 @@ struct smb5 {
 
 static struct smb_charger *__smbchg;
 
-static int __debug_mask = PR_MISC | PR_WLS | PR_OEM | PR_PARALLEL;
+static int __debug_mask = 0;
 
 static ssize_t pd_disabled_show(struct device *dev, struct device_attribute
 				*attr, char *buf)
@@ -444,28 +449,6 @@ static int get_valid_pullup(int pull_up)
 	default:
 		return INTERNAL_PULL_100K_PULL;
 	}
-}
-
-static int battery_shipmode(struct notifier_block  *reboot_notifier, unsigned long mode, void *cmd)
-{
-	struct smb_charger *chg = container_of(reboot_notifier, struct smb_charger,
-		 reboot_notifier);
-	int rc;
-	u8 val = 0;
-
-	if (chg->fake_shipmode) {
-		pr_err("enter shipmode successfully");
-	rc = smblib_masked_write(chg, SHIP_MODE_REG, SHIP_MODE_EN_BIT,
-			SHIP_MODE_EN_BIT);
-	if (rc < 0)
-		dev_err(chg->dev, "Couldn't %s ship mode, rc=%d\n",
-				chg->fake_shipmode ? "enable" : "disable", rc);
-	}
-	rc = smblib_read(chg, SHIP_MODE_REG, &val);
-	if (rc < 0)
-		dev_err(chg->dev, "Couldn't read Legacy status rc=%d\n", rc);
-	dev_err(chg->dev, "shipmode reg = %d", val);
-	return rc;
 }
 
 #define INTERNAL_PULL_UP_MASK	0x3
@@ -796,7 +779,7 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 			GFP_KERNEL);
 
 		if (chg->thermal_fcc_qc3_normal == NULL)
-			return -ENOMEM;
+				return -ENOMEM;
 
 		chg->thermal_levels = byte_len / sizeof(u32);
 		rc = of_property_read_u32_array(node,
@@ -815,7 +798,7 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 			GFP_KERNEL);
 
 		if (chg->thermal_fcc_qc3_cp == NULL)
-			return -ENOMEM;
+				return -ENOMEM;
 
 		chg->thermal_levels = byte_len / sizeof(u32);
 		rc = of_property_read_u32_array(node,
@@ -834,7 +817,7 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 			GFP_KERNEL);
 
 		if (chg->thermal_fcc_qc3_classb_cp == NULL)
-			return -ENOMEM;
+				return -ENOMEM;
 
 		chg->thermal_levels = byte_len / sizeof(u32);
 		rc = of_property_read_u32_array(node,
@@ -853,7 +836,7 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 			GFP_KERNEL);
 
 		if (chg->thermal_fcc_pps_cp == NULL)
-			return -ENOMEM;
+				return -ENOMEM;
 
 		chg->thermal_levels = byte_len / sizeof(u32);
 		rc = of_property_read_u32_array(node,
@@ -872,7 +855,7 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 			GFP_KERNEL);
 
 		if (chg->thermal_mitigation_icl == NULL)
-			return -ENOMEM;
+				return -ENOMEM;
 
 		chg->thermal_levels = byte_len / sizeof(u32);
 		rc = of_property_read_u32_array(node,
@@ -1152,8 +1135,9 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 	if (chg->support_conn_therm) {
 		chg->vbus_disable_gpio = of_get_named_gpio_flags(node,
 				"vbus-disable-gpio", 0, &flags);
-		if (chg->vbus_disable_gpio < 0)
+		if (chg->vbus_disable_gpio < 0) {
 			pr_err("failed to vbus disable gpio flags\n");
+		}
 	}
 
 	chg->support_ext_5v_boost = of_property_read_bool(node,
@@ -1504,7 +1488,6 @@ static int smb5_usb_get_prop(struct power_supply *psy,
 	struct smb_charger *chg = &chip->chg;
 	int rc = 0;
 	u8 reg = 0, buff[2] = {0};
-
 	val->intval = 0;
 
 	switch (psp) {
@@ -1533,15 +1516,6 @@ static int smb5_usb_get_prop(struct power_supply *psy,
 		val->intval = get_client_vote(chg->usb_icl_votable, PD_VOTER);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
-		if (smblib_get_fastcharge_mode(chg))
-    #if defined(CONFIG_BOARD_CAS) || defined(CONFIG_BOARD_MUNCH) || defined(CONFIG_BOARD_PIPA)
-			val->intval = 12000000;
-	#elif defined CONFIG_BOARD_CMI
-			val->intval = 10000000;
-	#else
-			val->intval = 6000000;
-	#endif
-		else
 		rc = smblib_get_prop_input_current_max(chg, val);
 		break;
 	case POWER_SUPPLY_PROP_TYPE:
@@ -1804,9 +1778,9 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 		chg->fake_conn_temp = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_VBUS_DISABLE:
-		if (chg->support_conn_therm)
+		if (chg->support_conn_therm){
 			smblib_set_vbus_disable(chg, val->intval);
-		else
+		} else
 			chg->vbus_disable = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_THERM_ICL_LIMIT:
@@ -1832,7 +1806,7 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_PD_AUTHENTICATION:
 		chg->pd_verifed = val->intval;
-		pr_err("set pd_verifed =%d\n", chg->pd_verifed);
+		pr_err("set pd_verifed =%d\n", chg->pd_verifed );
 		/*if set pd authentication auto set fastcharge mode*/
 		/*do not break here*/
 	case POWER_SUPPLY_PROP_FASTCHARGE_MODE:
@@ -1867,9 +1841,10 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 			chg->real_charger_type = POWER_SUPPLY_TYPE_USB_CDP;
 			chg->usb_psy_desc.type = POWER_SUPPLY_TYPE_USB_CDP;
 			pr_err("mtbf current 1500 and force to CDP!\n");
-			vote(chg->usb_icl_votable, USB_PSY_VOTER, true,
+			vote(chg->usb_icl_votable,USB_PSY_VOTER, true,
 					chg->mtbf_current*1000);
-		} else {
+		}
+		else{
 			smblib_rerun_apsd(chg);
 			rc = vote(chg->usb_icl_votable, USB_PSY_VOTER,
 							true, 500000);
@@ -1991,7 +1966,7 @@ static int smb5_usb_port_get_prop(struct power_supply *psy,
 		rc = smblib_get_prop_input_current_settled(chg, val);
 		break;
 	default:
-		pr_err_ratelimited("Get prop %d is not supported in pc_port\n",
+		pr_err("Get prop %d is not supported in pc_port\n",
 				psp);
 		return -EINVAL;
 	}
@@ -2012,7 +1987,7 @@ static int smb5_usb_port_set_prop(struct power_supply *psy,
 
 	switch (psp) {
 	default:
-		pr_err_ratelimited("Set prop %d is not supported in pc_port\n",
+		pr_err("Set prop %d is not supported in pc_port\n",
 				psp);
 		rc = -EINVAL;
 		break;
@@ -3078,7 +3053,6 @@ static enum power_supply_property smb5_batt_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_DONE,
 	POWER_SUPPLY_PROP_PARALLEL_DISABLE,
 	POWER_SUPPLY_PROP_SET_SHIP_MODE,
-	POWER_SUPPLY_PROP_SHIPMODE_COUNT_RESET,
 	POWER_SUPPLY_PROP_DIE_HEALTH,
 	POWER_SUPPLY_PROP_DC_THERMAL_LEVELS,
 	POWER_SUPPLY_PROP_RERUN_AICL,
@@ -3112,7 +3086,6 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 	struct smb_charger *chg = power_supply_get_drvdata(psy);
 	int rc = 0;
 	int  slave_temp, master_temp;
-
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
 		rc = smblib_get_prop_batt_status(chg, val);
@@ -3194,13 +3167,14 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_TEMP:
 		if (chg->typec_mode == POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
 			val->intval = DEBUG_ACCESSORY_TEMP_DECIDEGC;
-		else if (chg->chip_ok_count > 4) {
-			slave_temp = smblib_get_prop_batt_slave_temp(chg);
-			rc = smblib_get_prop_from_bms(chg, POWER_SUPPLY_PROP_TEMP, val);
+		else if(chg->chip_ok_count > 4) {
+			slave_temp= smblib_get_prop_batt_slave_temp(chg);
+			rc = smblib_get_prop_from_bms(chg,POWER_SUPPLY_PROP_TEMP, val);
 			master_temp = val->intval;
 			val->intval = master_temp > slave_temp ?  master_temp : slave_temp;
-		} else
-			rc = smblib_get_prop_from_bms(chg, POWER_SUPPLY_PROP_TEMP, val);
+		}	
+		else 
+			rc = smblib_get_prop_from_bms(chg,POWER_SUPPLY_PROP_TEMP, val);
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LIPO;
@@ -3215,10 +3189,6 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_SET_SHIP_MODE:
 		/* Not in ship mode as long as device is active */
 		val->intval = 0;
-		break;
-	case POWER_SUPPLY_PROP_SHIPMODE_COUNT_RESET:
-		/* Not in ship mode as long as device is active */
-		val->intval = chg->fake_shipmode;
 		break;
 	case POWER_SUPPLY_PROP_DIE_HEALTH:
 		rc = smblib_get_die_health(chg, val);
@@ -3373,17 +3343,13 @@ static int smb5_batt_set_prop(struct power_supply *psy,
 		}
 		break;
 	case POWER_SUPPLY_PROP_SET_SHIP_MODE:
-		/* Not in ship mode as long as the device is active */
+		/* Not in ship mode as long as the device is active 
 		if (!val->intval)
 			break;
 		if (chg->pl.psy)
 			power_supply_set_property(chg->pl.psy,
-				POWER_SUPPLY_PROP_SET_SHIP_MODE, val);
+				POWER_SUPPLY_PROP_SET_SHIP_MODE, val);*/
 		rc = smblib_set_prop_ship_mode(chg, val);
-		break;
-	case POWER_SUPPLY_PROP_SHIPMODE_COUNT_RESET:
-		/* Not in ship mode as long as device is active */
-		chg->fake_shipmode =  val->intval;
 		break;
 	case POWER_SUPPLY_PROP_RERUN_AICL:
 		rc = smblib_run_aicl(chg, RERUN_AICL);
@@ -3467,7 +3433,6 @@ static int smb5_batt_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_RECHARGE_VBAT:
 	case POWER_SUPPLY_PROP_NIGHT_CHARGING:
 	case POWER_SUPPLY_PROP_SMART_BATTERY:
-	case POWER_SUPPLY_PROP_SHIPMODE_COUNT_RESET:
 	case POWER_SUPPLY_PROP_SET_SHIP_MODE:
 		return 1;
 	default:
@@ -4111,9 +4076,8 @@ static int smb5_init_connector_type(struct smb_charger *chg)
 	 */
 	if (chg->chg_param.smb_version == PMI632_SUBTYPE) {
 		schgm_flash_init(chg);
+		smblib_rerun_apsd_if_required(chg);
 	}
-
-	smblib_rerun_apsd_if_required(chg);
 
 	return 0;
 
@@ -4250,7 +4214,7 @@ static int smb5_init_hw(struct smb5 *chip)
 		chip->dt.batt_unverify_fcc_ua > 0, chip->dt.batt_unverify_fcc_ua);
 
 	if (chg->ext_bbc) {
-		vote(chg->usb_icl_votable, BBC_CHARGER_VOTER, true, 0);
+		vote(chg->usb_icl_votable, BBC_CHARGER_VOTER, true , 0);
 		vote(chg->chg_disable_votable, BBC_CHARGER_VOTER, true, 1);
 	}
 
@@ -5193,10 +5157,6 @@ static int smb5_probe(struct platform_device *pdev)
 		}
 	}
 
-	chg->reboot_notifier.notifier_call = battery_shipmode;
-	chg->reboot_notifier.priority = 255;
-	register_reboot_notifier(&chg->reboot_notifier);
-
 	switch (chg->chg_param.smb_version) {
 	case PM8150B_SUBTYPE:
 	case PM6150_SUBTYPE:
@@ -5283,7 +5243,7 @@ static int smb5_probe(struct platform_device *pdev)
 	}
 
 	schedule_delayed_work(&chg->reg_work, 30 * HZ);
-	schedule_delayed_work(&chg->check_batt_missing_work, 0);
+	schedule_delayed_work(&chg->check_batt_missing_work, 0 );
 
 	return rc;
 
@@ -5309,7 +5269,6 @@ static int smb5_remove(struct platform_device *pdev)
 	smblib_deinit(chg);
 	sysfs_remove_groups(&chg->dev->kobj, smb5_groups);
 	platform_set_drvdata(pdev, NULL);
-    unregister_reboot_notifier(&chg->reboot_notifier);
 	return 0;
 }
 

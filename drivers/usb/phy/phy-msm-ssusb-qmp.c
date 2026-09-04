@@ -16,7 +16,6 @@
 #include <linux/clk.h>
 #include <linux/extcon.h>
 #include <linux/reset.h>
-#include <linux/debugfs.h>
 
 enum core_ldo_levels {
 	CORE_LEVEL_NONE = 0,
@@ -72,22 +71,6 @@ enum core_ldo_levels {
 #define USB3_MODE		BIT(0) /* enables USB3 mode */
 #define DP_MODE			BIT(1) /* enables DP mode */
 #define USB3_DP_COMBO_MODE	(USB3_MODE | DP_MODE) /*enables combo mode */
-
-#define USB3_DP_QSERDES_TXA_TX_DRV_LVL		(0x1214)
-#define USB3_DP_PCS_G12S1_TXMGN_V0		(0x1D38)
-#define USB3_DP_PCS_G12S1_TXDEEMPH_M3P5DB 	(0x1D6C)
-
-unsigned int ssphy_txa_tx_drv_lvl;
-module_param(ssphy_txa_tx_drv_lvl, uint, 0644);
-MODULE_PARM_DESC(ssphy_txa_tx_drv_lvl, "USB3_DP_QSERDES_TXA_TX_DRV_LVL");
-
-unsigned int ssphy_pcs_g12s1_txmgn_v0;
-module_param(ssphy_pcs_g12s1_txmgn_v0, uint, 0644);
-MODULE_PARM_DESC(ssphy_pcs_g12s1_txmgn_v0, "USB3_DP_PCS_G12S1_TXMGN_V0");
-
-unsigned int ssphy_pcs_g12s1_txdeemph_m3p5db;
-module_param(ssphy_pcs_g12s1_txdeemph_m3p5db, uint, 0644);
-MODULE_PARM_DESC(ssphy_pcs_g12s1_txdeemph_m3p5db, "USB3_DP_PCS_G12S1_TXDEEMPH_M3P5DB");
 
 enum qmp_phy_rev_reg {
 	USB3_PHY_PCS_STATUS,
@@ -156,18 +139,6 @@ struct msm_ssphy_qmp {
 	int			reg_offset_cnt;
 	u32			*qmp_phy_init_seq;
 	int			init_seq_len;
-	bool        usb3_eye;
-
-	/* debugfs entries */
-	struct dentry       *root;
-	u8         TXA_DRV_LVL;
-	u8         TXB_DRV_LVL;
-	u8         TXA_PRE_EMPH;
-	u8         TXB_PRE_EMPH;
-	u8         TXA_POST1_LVL;
-	u8         TXB_POST1_LVL;
-	u8         TXMGN_V0;
-	u8         TXDEEMPH_M3P5DB;
 };
 
 static const struct of_device_id msm_usb_id_table[] = {
@@ -375,10 +346,6 @@ static int configure_phy_regs(struct usb_phy *uphy,
 			usleep_range(reg->delay, reg->delay + 10);
 		reg++;
 	}
-
-	if (phy->usb3_eye)
-		reg = reg - 153;
-
 	return 0;
 }
 
@@ -482,61 +449,6 @@ static void usb_qmp_powerup_phy(struct msm_ssphy_qmp *phy)
 	mb();
 }
 
-static void msm_ssphy_xiaomi_update_write(struct usb_phy *uphy)
-{
-	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
-					phy);
-
-	if (ssphy_txa_tx_drv_lvl)
-		writel_relaxed(ssphy_txa_tx_drv_lvl,
-			phy->base + USB3_DP_QSERDES_TXA_TX_DRV_LVL);
-
-	if (ssphy_pcs_g12s1_txmgn_v0)
-		writel_relaxed(ssphy_pcs_g12s1_txmgn_v0,
-			phy->base + USB3_DP_PCS_G12S1_TXMGN_V0);
-
-	if (ssphy_pcs_g12s1_txdeemph_m3p5db)
-		writel_relaxed(ssphy_pcs_g12s1_txdeemph_m3p5db,
-			phy->base + USB3_DP_PCS_G12S1_TXDEEMPH_M3P5DB);
-}
-
-static void msm_ssphy_xiaomi_update_read(struct usb_phy *uphy)
-{
-	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
-					phy);
-
-	pr_err("%s: USB3_DP: QSERDES_TXA_TX_DRV_LVL: (0x%02x)\n",
-		__func__,
-		readb_relaxed(phy->base + USB3_DP_QSERDES_TXA_TX_DRV_LVL));
-
-	pr_err("%s: USB3_DP: PCS_G12S1_TXMGN_V0: (0x%02x)\n",
-		__func__,
-		readb_relaxed(phy->base + USB3_DP_PCS_G12S1_TXMGN_V0));
-
-	pr_err("%s: USB3_DP: PCS_G12S1_TXDEEMPH_M3P5DB: (0x%02x)\n",
-		__func__,
-		readb_relaxed(phy->base + USB3_DP_PCS_G12S1_TXDEEMPH_M3P5DB));
-}
-
-static void msm_usb_write_readback(void __iomem *base, u32 offset,
-					const u32 mask, u32 val)
-{
-	u32 write_val, tmp = readl_relaxed(base + offset);
-
-	tmp &= ~mask;		/* retain other bits */
-	write_val = tmp | val;
-
-	writel_relaxed(write_val, base + offset);
-
-	/* Read back to see if val was written */
-	tmp = readl_relaxed(base + offset);
-	tmp &= mask;		/* clear other bits */
-
-	if (tmp != val)
-		pr_err("%s: write: %x to QSCRATCH: %x FAILED\n",
-			__func__, val, offset);
-}
-
 /* SSPHY Initialization */
 static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 {
@@ -573,10 +485,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		goto fail;
 	}
 
-	/* Update the xiaomi modified PHY QMP registers */
-	msm_ssphy_xiaomi_update_write(uphy);
-	msm_ssphy_xiaomi_update_read(uphy);
-
 	/* perform software reset of PHY common logic */
 	if (phy->phy.type == USB_PHY_TYPE_USB3_AND_DP &&
 				!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE))
@@ -609,116 +517,7 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		goto fail;
 	};
 
-	if (phy->usb3_eye) {
-		if (phy->TXA_DRV_LVL) {
-			dev_err(uphy->dev, "TXA_DRV_LVL:%02x.\n",
-				phy->TXA_DRV_LVL);
-
-			if ((reg + 144) && (reg + 144)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 144)->offset,
-						       0xFF, phy->TXA_DRV_LVL);
-				dev_err(uphy->dev, "enter write A.\n");
-			}
-		}
-
-		if (phy->TXB_DRV_LVL) {
-			dev_err(uphy->dev, "TXB_DRV_LVL:%02x.\n",
-				phy->TXB_DRV_LVL);
-
-			if ((reg + 145) && (reg + 145)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 145)->offset,
-						       0xFF, phy->TXB_DRV_LVL);
-			}
-		}
-
-		if (phy->TXA_PRE_EMPH) {
-			dev_err(uphy->dev, "TXA_PRE_EMPH:%02x.\n",
-				phy->TXA_PRE_EMPH);
-
-			if ((reg + 146) && (reg + 146)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 146)->offset,
-						       0xFF, phy->TXA_PRE_EMPH);
-			}
-		}
-
-		if (phy->TXB_PRE_EMPH) {
-			dev_err(uphy->dev, "TXB_PRE_EMPH:%02x.\n",
-				phy->TXB_PRE_EMPH);
-
-			if ((reg + 147) && (reg + 147)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 147)->offset,
-						       0xFF, phy->TXB_PRE_EMPH);
-			}
-		}
-
-		if (phy->TXA_POST1_LVL) {
-			dev_err(uphy->dev, "TXA_POST1_LVL:%02x.\n",
-				phy->TXA_POST1_LVL);
-
-			if ((reg + 148) && (reg + 148)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 148)->offset,
-						       0xFF,
-						       phy->TXA_POST1_LVL);
-			}
-		}
-
-		if (phy->TXB_POST1_LVL) {
-			dev_err(uphy->dev, "TXB_POST1_LVL:%02x.\n",
-				phy->TXB_POST1_LVL);
-
-			if ((reg + 149) && (reg + 149)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 149)->offset,
-						       0xFF,
-						       phy->TXB_POST1_LVL);
-			}
-		}
-
-		if (phy->TXMGN_V0) {
-			dev_err(uphy->dev, "TXMGN_V0:%02x.\n", phy->TXMGN_V0);
-
-			if ((reg + 150) && (reg + 150)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 150)->offset,
-						       0xFF, phy->TXMGN_V0);
-			}
-		}
-
-		if (phy->TXDEEMPH_M3P5DB) {
-			dev_err(uphy->dev, "TXDEEMPH_M3P5DB:%02x.\n",
-				phy->TXDEEMPH_M3P5DB);
-
-			if ((reg + 151) && (reg + 151)->offset != -1) {
-				msm_usb_write_readback(phy->base,
-						       (reg + 151)->offset,
-						       0xFF,
-						       phy->TXDEEMPH_M3P5DB);
-			}
-		}
-
-		dev_err(uphy->dev,
-			"TXA_DRV_LVL:%02x, TXB_DRV_LVL:%02x, TXA_PRE_EMPH:%02x, TXB_PRE_EMPH:%02x, TXA_POST1_LVL:%02x, TXB_POST1_LVL:%02x, TXMGN_V0:%02x, TXDEEMPH_M3P5DB:%02x,  G3S2_TXMGN_MAIN:%02x.\n",
-			readl_relaxed(phy->base + (reg + 144)->offset),
-			readl_relaxed(phy->base + (reg + 145)->offset),
-			readl_relaxed(phy->base + (reg + 146)->offset),
-			readl_relaxed(phy->base + (reg + 147)->offset),
-			readl_relaxed(phy->base + (reg + 148)->offset),
-			readl_relaxed(phy->base + (reg + 149)->offset),
-			readl_relaxed(phy->base + (reg + 150)->offset),
-			readl_relaxed(phy->base + (reg + 151)->offset),
-			readl_relaxed(phy->base + (reg + 152)->offset));
-	}
-
-	dev_err(uphy->dev, "Start register content: %x.\n",
-		readl_relaxed(phy->base + phy->phy_reg[USB3_PHY_START]));
-
 	return 0;
-
 fail:
 	phy->in_suspend = true;
 	writel_relaxed(0x00,
@@ -1117,22 +916,6 @@ static void msm_ssphy_qmp_enable_clks(struct msm_ssphy_qmp *phy, bool on)
 	}
 }
 
-static void msm_ssphy_create_debugfs(struct msm_ssphy_qmp *phy)
-{
-	phy->root = debugfs_create_dir(dev_name(phy->phy.dev), NULL);
-	debugfs_create_x8("txa_drv_lvl", 0644, phy->root, &phy->TXA_DRV_LVL);
-	debugfs_create_x8("txb_drv_lvl", 0644, phy->root, &phy->TXB_DRV_LVL);
-	debugfs_create_x8("txa_pre_emph", 0644, phy->root, &phy->TXA_PRE_EMPH);
-	debugfs_create_x8("txb_pre_emph", 0644, phy->root, &phy->TXB_PRE_EMPH);
-	debugfs_create_x8("txa_post1_lvl", 0644, phy->root,
-			  &phy->TXA_POST1_LVL);
-	debugfs_create_x8("txb_post1_lvl", 0644, phy->root,
-			  &phy->TXB_POST1_LVL);
-	debugfs_create_x8("txmgn_v0", 0644, phy->root, &phy->TXMGN_V0);
-	debugfs_create_x8("txdeemph_m3p5", 0644, phy->root,
-			  &phy->TXDEEMPH_M3P5DB);
-}
-
 static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 {
 	struct msm_ssphy_qmp *phy;
@@ -1332,10 +1115,6 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 	if (of_property_read_bool(dev->of_node, "qcom,vbus-valid-override"))
 		phy->phy.flags |= PHY_VBUS_VALID_OVERRIDE;
 
-	phy->usb3_eye =
-		of_property_read_bool(dev->of_node, "usb3,eyegram-tuning");
-	dev_info(dev, "usb3 eye gram:%d\n", phy->usb3_eye);
-
 	phy->phy.dev			= dev;
 	phy->phy.init			= msm_ssphy_qmp_init;
 	phy->phy.set_suspend		= msm_ssphy_qmp_set_suspend;
@@ -1353,8 +1132,6 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 
 	ret = usb_add_phy_dev(&phy->phy);
 
-	msm_ssphy_create_debugfs(phy);
-
 err:
 	return ret;
 }
@@ -1366,12 +1143,9 @@ static int msm_ssphy_qmp_remove(struct platform_device *pdev)
 	if (!phy)
 		return 0;
 
-	debugfs_remove_recursive(phy->root);
 	usb_remove_phy(&phy->phy);
 	msm_ssphy_qmp_enable_clks(phy, false);
 	msm_ssusb_qmp_ldo_enable(phy, 0);
-	kfree(phy);
-
 	return 0;
 }
 

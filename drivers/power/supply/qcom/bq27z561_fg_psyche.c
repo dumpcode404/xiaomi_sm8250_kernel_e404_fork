@@ -297,7 +297,6 @@ static int bq_battery_soc_smooth_tracking(struct bq_fg_chip *chip,
 		int raw_soc, int soc, int temp, int curr);
 static int fg_get_raw_soc(struct bq_fg_chip *bq);
 static int fg_read_current(struct bq_fg_chip *bq, int *curr);
-static int fg_read_volt(struct bq_fg_chip *bq);
 static int fg_read_temperature(struct bq_fg_chip *bq);
 static int fg_check_full_status(struct bq_fg_chip *bq);
 
@@ -942,18 +941,6 @@ static int fg_read_rsoc(struct bq_fg_chip *bq)
 	return soc;
 }
 
-#define SMOOTH_VOLT_LEN    4 
-struct LowSoc_HighVolt_Smooth{
-	int volt_value;
-	int unit_time;
-};
-static struct LowSoc_HighVolt_Smooth lowsoc_highvolt_smooth[SMOOTH_VOLT_LEN] = {
-	{0,    10000},
-	{3400, 30000},
-	{3500, 45000},
-	{3600, 60000},
-}; 
-
 #define HW_REPORT_FULL_SOC 9700
 #define CRITICAL_SOC 2790
 #define SOC_HY 2
@@ -963,7 +950,7 @@ static struct LowSoc_HighVolt_Smooth lowsoc_highvolt_smooth[SMOOTH_VOLT_LEN] = {
 #define HOLD_ONE_PERCENT_COUNT 5
 static int fg_read_system_soc(struct bq_fg_chip *bq)
 {
-	int soc, curr, volt, temp, raw_soc, bat_soc;   
+	int soc, curr, temp, raw_soc, bat_soc;
 	static ktime_t last_change_time = -1;
 	static int hold_soc_count;
 	static bool hold_flag = true;
@@ -972,7 +959,6 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 	int soc_changed = 0;
 	int status = 0;
 	int smooth_soc_tmp = 0;
- 	int i;
 	union power_supply_propval pval = {0, };
 
 	bat_soc = fg_read_rsoc(bq);
@@ -1004,16 +990,16 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 				last_change_time = ktime_get();
 				delta_time = 0;
 			}
-			delta_time = change_delta / unit_time;   
-			soc_changed = min(1, delta_time);         
+			delta_time = change_delta / unit_time;
+			soc_changed = min(1, delta_time);
 			if (soc_changed) {
 				soc = bq->last_soc + soc_changed;
 				bq_dbg(PR_OEM, "soc increase changed = %d\n", soc_changed);
 			} else
 				soc = bq->last_soc;
-		} else  
+		} else
 			soc = 100;
-	} else if (raw_soc > CRITICAL_SOC) { 
+	} else if (raw_soc > CRITICAL_SOC) {
 		soc += SOC_HY;
 		if ((soc <= (100 + SOC_HY)) && (soc > 99))
 			soc = 99;
@@ -1041,15 +1027,7 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 	} else {
 		if (raw_soc == 0 && bq->last_soc > 1) {
 			bq->ffc_smooth = false;
-                  	  
-  			volt = fg_read_volt(bq);
-			for(i = SMOOTH_VOLT_LEN; i > 0; i--){
-				if(volt > lowsoc_highvolt_smooth[i-1].volt_value){
-					unit_time = lowsoc_highvolt_smooth[i-1].unit_time;
-					break;
-				}
-			}
-		
+			unit_time = 10000;
 			calc_delta_time(last_change_time, &change_delta);
 			delta_time = change_delta / unit_time;
 			if (delta_time < 0) {
@@ -2798,7 +2776,7 @@ static void fg_monitor_workfunc(struct work_struct *work)
 		fg_update_charge_full(bq);
 	}
 
-	schedule_delayed_work(&bq->monitor_work, period * HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work, period * HZ);
 }
 static int bq_parse_dt(struct bq_fg_chip *bq)
 {
@@ -2961,7 +2939,7 @@ static int bq_fg_probe(struct i2c_client *client,
 		bq_dbg(PR_OEM, "Failed to register sysfs, err:%d\n", ret);
 
 	INIT_DELAYED_WORK(&bq->monitor_work, fg_monitor_workfunc);
-	schedule_delayed_work(&bq->monitor_work,10 * HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work,10 * HZ);
 
 	bq_dbg(PR_OEM, "bq fuel gauge probe successfully, %s\n",
 			device2str[bq->chip]);
@@ -2998,7 +2976,7 @@ static int bq_fg_resume(struct device *dev)
 		bq->update_now = true;
 	}
 
-	schedule_delayed_work(&bq->monitor_work, HZ);
+	queue_delayed_work(system_power_efficient_wq, &bq->monitor_work, HZ);
 
 	return 0;
 }

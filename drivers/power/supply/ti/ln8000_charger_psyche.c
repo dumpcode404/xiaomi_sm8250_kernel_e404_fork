@@ -2,6 +2,7 @@
  * ln8000-charger.c - Charger driver for LIONSEMI LN8000
  *
  * Copyright (C) 2021 Lion Semiconductor Inc.
+ * Copyright (C) 2021 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -1400,7 +1401,7 @@ static void check_vac_ov_work(struct ln8000_info *info)
 
 	if (sys_st == 0x02 && fault1_st == 0x00) {  /* connected valid VBUS */
 		if (info->vac_ov_work_on == 0) {        /* vac_ov_work not worked */
-			schedule_delayed_work(&info->vac_ov_work, msecs_to_jiffies(0));
+			queue_delayed_work(system_power_efficient_wq, &info->vac_ov_work, msecs_to_jiffies(0));
 			info->vac_ov_work_on = 1;
 			ln_info("schedule_work : vac_ov_work\n");
 		}

@@ -890,7 +890,6 @@ int fg_get_msoc_raw(struct fg_dev *fg, int *val)
 		return -EINVAL;
 	}
 
-//	fg_dbg(fg, FG_POWER_SUPPLY, "raw: 0x%02x\n", cap[0]);
 	*val = cap[0];
 	return 0;
 }
@@ -910,8 +909,6 @@ int fg_get_msoc(struct fg_dev *fg, int *msoc)
 		return rc;
 
 	if (fg->param.smooth_batt_flag) {
-//		pr_info("===raw_msoc:%d\n", raw_msoc);
-
 		if (raw_msoc >= 255) {
 			*msoc = FULL_CAPACITY;
 		} else if (raw_msoc >= 252 && !optimized_soc_flag && fg->report_full) {

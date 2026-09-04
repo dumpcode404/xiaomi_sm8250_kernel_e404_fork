@@ -19,8 +19,6 @@
 
 #include "power_supply.h"
 
-//#undef dev_dbg
-//#define dev_dbg  dev_err
 /*
  * This is because the name "current" breaks the device attr macro.
  * The "current" word resolves to "(get_current())" so instead of
@@ -48,7 +46,8 @@ static const char * const power_supply_type_text[] = {
 	"USB_PD", "USB_PD_DRP", "BrickID",
 	"USB_HVDCP", "USB_HVDCP_3", "USB_HVDCP_3", "Wireless", "USB_FLOAT",
 	"BMS", "Parallel", "Main", "USB_C_UFP", "USB_C_DFP",
-	"Charge_Pump","Batt_Verify"
+	"Charge_Pump",
+	"Batt_Verify",
 };
 
 static const char * const power_supply_usb_type_text[] = {
@@ -474,7 +473,6 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(usb_otg),
 	POWER_SUPPLY_ATTR(charge_enabled),
 	POWER_SUPPLY_ATTR(set_ship_mode),
-        POWER_SUPPLY_ATTR(shipmode_count_reset),
 	POWER_SUPPLY_ATTR(real_type),
 	POWER_SUPPLY_ATTR(hvdcp3_type),
 	POWER_SUPPLY_ATTR(fake_hvdcp3),
@@ -799,29 +797,12 @@ void power_supply_init_attrs(struct device_type *dev_type)
 		__power_supply_attrs[i] = &power_supply_attrs[i].attr;
 }
 
-static char *kstruprdup(const char *str, gfp_t gfp)
-{
-	char *ret, *ustr;
-
-	ustr = ret = kmalloc(strlen(str) + 1, gfp);
-
-	if (!ret)
-		return NULL;
-
-	while (*str)
-		*ustr++ = toupper(*str++);
-
-	*ustr = 0;
-
-	return ret;
-}
-
 int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
 	int ret = 0, j;
 	char *prop_buf;
-	char *attrname;
+	char attrname[64];
 
 	if (!psy || !psy->desc) {
 		dev_dbg(dev, "No power supply yet\n");
@@ -838,7 +819,8 @@ int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 
 	for (j = 0; j < psy->desc->num_properties; j++) {
 		struct device_attribute *attr;
-		char *line;
+		const char *str;
+		char *line, *ustr;
 
 		attr = &power_supply_attrs[psy->desc->properties[j]];
 
@@ -857,14 +839,14 @@ int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 		if (line)
 			*line = 0;
 
-		attrname = kstruprdup(attr->attr.name, GFP_KERNEL);
-		if (!attrname) {
-			ret = -ENOMEM;
-			goto out;
-		}
+		str = attr->attr.name;
+		ustr = attrname;
+		while (*str)
+			*ustr++ = toupper(*str++);
+
+		*ustr = 0;
 
 		ret = add_uevent_var(env, "POWER_SUPPLY_%s=%s", attrname, prop_buf);
-		kfree(attrname);
 		if (ret)
 			goto out;
 	}
