@@ -3,6 +3,7 @@
  * USB Type-C Connector Class
  *
  * Copyright (C) 2017, Intel Corporation
+ * Copyright (C) 2021 XiaoMi, Inc.
  * Author: Heikki Krogerus <heikki.krogerus@linux.intel.com>
  */
 
@@ -483,6 +484,7 @@ static void typec_altmode_release(struct device *dev)
 		typec_altmode_put_partner(alt);
 
 	altmode_id_remove(alt->adev.dev.parent, alt->id);
+	put_device(alt->adev.dev.parent);
 	kfree(alt);
 }
 
@@ -531,6 +533,8 @@ typec_register_altmode(struct device *parent,
 	alt->adev.dev.groups = alt->groups;
 	alt->adev.dev.type = &typec_altmode_dev_type;
 	dev_set_name(&alt->adev.dev, "%s.%u", dev_name(parent), id);
+
+	get_device(alt->adev.dev.parent);
 
 	/* Link partners and plugs with the ports */
 	if (is_port)
@@ -1385,6 +1389,10 @@ void typec_set_pwr_opmode(struct typec_port *port,
 
 	if ((port->pwr_opmode == opmode) || (opmode < TYPEC_PWR_MODE_USB) ||
 						(opmode > TYPEC_PWR_MODE_MAX))
+		return;
+
+	pr_err("%s pwr opmode:%d\n", __func__, opmode);
+	if (opmode > TYPEC_PWR_MODE_PD)
 		return;
 
 	port->pwr_opmode = opmode;

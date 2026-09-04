@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2021 XiaoMi, Inc.
  */
 
 #ifndef __FG_CORE_H__
@@ -101,8 +102,7 @@
 #define EMPTY_REPORT_SOC		1
 
 #define CRITICAL_HIGH_TEMP			580
-#define FFC_WARM_THRE 				480
-#define FFC_COLD_THRE 				 150
+
 enum prof_load_status {
 	PROFILE_MISSING,
 	PROFILE_LOADED,
@@ -469,11 +469,8 @@ struct fg_dev {
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
 	struct power_supply	*pc_port_psy;
-#if defined (CONFIG_BATT_VERIFY_BY_DS28E16) || defined (CONFIG_BATT_VERIFY_BY_DS28E16_PIPA)
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
 	struct power_supply *max_verify_psy;
-#endif
-#ifdef CONFIG_BATT_VERIFY_BY_DS28E16_PIPA
-    struct power_supply *max_verify_slave_psy;
 #endif
 	struct fg_irq_info	*irqs;
 	struct votable		*awake_votable;
@@ -532,7 +529,6 @@ struct fg_dev {
 	bool			empty_restart_fg;
 	bool			report_full;
 	bool			profile_already_find;
-	bool			input_present;
 	bool			shutdown_delay;
 	enum fg_version		version;
 	struct batt_params	param;

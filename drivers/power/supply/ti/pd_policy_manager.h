@@ -101,25 +101,17 @@ enum pm_state {
 /* jeita related */
 #define JEITA_WARM_THR			450
 #define JEITA_COOL_NOT_ALLOW_CP_THR			100
-#define JEITA_COOL_NOT_ALLOW_CP_THR_PIPA			50
-#define JEITA_COOL_NOT_ALLOW_CP_THR_DAGU         50	
 /*
  * add hysteresis for warm threshold to avoid flash
  * charge and normal charge switch frequently at
  * the warm threshold
  */
 #define JEITA_HYSTERESIS			20
-#define JEITA_HYSTERESIS_PIPA_48			21
-#define JEITA_HYSTERESIS_PIPA			2
-#define JEITA_HYSTERESIS_DAGU_48			21
-#define JEITA_HYSTERESIS_DAGU			2
 
 #define BQ_TAPER_HYS_MV			10
 #define NON_FFC_BQ_TAPER_HYS_MV			50
 
 #define BQ_TAPER_DECREASE_STEP_MA			200
-#define BQ_TAPER_DECREASE_STEP_MA_PIPA			300
-#define BQ_TAPER_DECREASE_STEP_MA_DAGU			300
 #define BQ_SOFT_TAPER_DECREASE_STEP_MA			100
 #define STEP_VFLOAT_INDEX_MAX			2
 
@@ -135,8 +127,6 @@ enum pm_state {
 
 #define TAPER_DONE_FFC_MA			2400
 #define TAPER_DONE_FFC_MA_LN8000		2500
-#define TAPER_DONE_FFC_MA_LN8000_PIPA		2600
-#define TAPER_DONE_FFC_MA_LN8000_DAGU		2600
 #define TAPER_DONE_NORMAL_MA			2200
 
 #define VBAT_HIGH_FOR_FC_HYS_MV		100
@@ -257,7 +247,6 @@ struct usbpd_pm {
 	spinlock_t psy_change_lock;
 
 	struct votable		*fcc_votable;
-	struct votable		*fv_votable;
 	struct power_supply *cp_psy;
 	struct power_supply *cp_sec_psy;
 	struct power_supply *sw_psy;

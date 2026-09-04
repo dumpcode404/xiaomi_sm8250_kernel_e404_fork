@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2021 XiaoMi, Inc.
  */
 
 #define pr_fmt(fmt) "SMB1398: %s: " fmt, __func__
@@ -288,22 +289,12 @@
 #define WLDC_XIAOMI_30W_IOUT_MAX_UA	1500000
 #define WLDC_XIAOMI_40W_IOUT_MAX_UA	2000000
 
-#ifdef CONFIG_FACTORY_BUILD
-#define WLDC_XIAOMI_50W_IOUT_MAX_UA	2260000
-#else
 #define WLDC_XIAOMI_50W_IOUT_MAX_UA	2500000
-#endif
 
 #define WLS_MAIN_CHAREGER_ICL_UA 200000
-#ifdef CONFIG_FACTORY_BUILD
-#define WLS_MAIN_START_ILIM_UA 1300000
-#define WLS_MAIN_START_ILIM_THRESHOLD_UA 1100000
-#define WLS_MAIN_START_ILIM_CNT 10
-#else
 #define WLS_MAIN_START_ILIM_UA 800000
 #define WLS_MAIN_START_ILIM_THRESHOLD_UA 600000
 #define WLS_MAIN_START_ILIM_CNT 20
-#endif
 
 #define MAX_MONITOR_CYCLE_CNT 70
 #define MAX_RX_TEMPERATRUE 90

@@ -3,7 +3,7 @@
  * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
  */
 
-#define pr_fmt(fmt)	"FG: %s: " fmt, __func__
+#define pr_fmt(fmt)
 
 #include <linux/alarmtimer.h>
 #include <linux/irq.h>
@@ -22,6 +22,11 @@
 #include "fg-alg.h"
 /* add for get hw country */
 #include <soc/qcom/socinfo.h>
+
+#undef pr_info
+#undef pr_err
+#define pr_info pr_debug
+#define pr_err pr_debug
 
 #define FG_GEN4_DEV_NAME	"qcom,fg-gen4"
 #define TTF_AWAKE_VOTER		"fg_ttf_awake"
@@ -359,7 +364,7 @@ struct bias_config {
 	int	bias_kohms;
 };
 
-static int fg_gen4_debug_mask = FG_STATUS | FG_FVSS | FG_POWER_SUPPLY;
+static int fg_gen4_debug_mask = 0;
 
 static bool is_batt_vendor_gyb;
 static bool is_batt_vendor_nvt;
@@ -863,11 +868,11 @@ static int fg_gen4_get_battery_temp(struct fg_dev *fg, int *val)
 	 */
 	*val = sign_extend32(buf, 9) * 100 / 40;
 
-	if (!fg->usb_psy)
+	if(!fg->usb_psy)
 		fg->usb_psy = power_supply_get_by_name("usb");
-	if (fg->usb_psy)
+	if(fg->usb_psy)
 		rc = power_supply_get_property(fg->usb_psy, POWER_SUPPLY_PROP_BATTERY_SLAVE_TEMP,
-	    &prop);
+            &prop);
 	if (rc < 0) {
 		pr_err("Error in getting slave temp, rc=%d\n", rc);
 		return rc;
@@ -875,17 +880,14 @@ static int fg_gen4_get_battery_temp(struct fg_dev *fg, int *val)
 	slave_temp = prop.intval;
 
 	if (*val > 240 && slave_temp > 240)
-		*val = *val > slave_temp ? *val : slave_temp;
-	else if ((*val > 240 && slave_temp < 240) ||
-		 (*val < 240 && slave_temp > 240))
-		*val = *val > slave_temp ? *val : slave_temp;
-	else if ((*val < -150 && slave_temp > -150) ||
-		 (slave_temp < -150 && *val > -150)) {
-		if (*val < -150)
+		*val = *val > slave_temp ?  *val : slave_temp;
+	else if((*val > 240 && slave_temp < 240) || (*val < 240 && slave_temp > 240))
+		*val = *val > slave_temp ?  *val : slave_temp;
+	else if((*val < -150 && slave_temp > -150)||(slave_temp < -150 && *val > -150)) {     
+		if(*val < -150)
 			*val = slave_temp;
 	} else
-		*val = *val < slave_temp ? *val : slave_temp;
-
+		*val = *val < slave_temp ?  *val : slave_temp;
 	return 0;
 }
 
@@ -4480,8 +4482,9 @@ static void battery_authentic_work(struct work_struct *work)
 				msecs_to_jiffies(battery_authentic_period_ms));
 		}
 
-		if (retry_battery_authentic_result == BATTERY_AUTHENTIC_COUNT_MAX)
+		if (retry_battery_authentic_result == BATTERY_AUTHENTIC_COUNT_MAX) {
 			pr_err("FG: authentic prop is %d\n", pval.intval);
+		}
 	} else {
 		pr_err("FG: authentic prop is %d\n", pval.intval);
 		schedule_delayed_work(&chip->ds_romid_work,
@@ -4506,7 +4509,6 @@ static void ds_romid_work(struct work_struct *work)
 				struct fg_gen4_chip,
 				ds_romid_work.work);
 	struct fg_dev *fg = &chip->fg;
-
 	rc = power_supply_get_property(fg->fg_psy,
 					POWER_SUPPLY_PROP_ROMID, &pval);
 	if (rc < 0) {
@@ -4542,7 +4544,6 @@ static void ds_status_work(struct work_struct *work)
 				struct fg_gen4_chip,
 				ds_status_work.work);
 	struct fg_dev *fg = &chip->fg;
-
 	rc = power_supply_get_property(fg->fg_psy,
 					POWER_SUPPLY_PROP_DS_STATUS, &pval);
 	if (rc < 0) {
@@ -5083,21 +5084,22 @@ static int fg_psy_get_property(struct power_supply *psy,
 
 	if (fg->max_verify_psy == NULL) {
 		fg->max_verify_psy = power_supply_get_by_name("batt_verify");
-		if (fg->max_verify_psy == NULL)
+		if (fg->max_verify_psy == NULL) {
 			pr_debug("max_verify_psy is NULL\n");
+		}
 	}
 
 	if (fg->max_verify_slave_psy == NULL) {
-		fg->max_verify_slave_psy =
-			power_supply_get_by_name("batt_verify_slave");
-		if (fg->max_verify_slave_psy == NULL)
+		fg->max_verify_slave_psy = power_supply_get_by_name("batt_verify_slave");
+		if (fg->max_verify_slave_psy == NULL) {
 			pr_err("max_verify_slave_psy is NULL\n");
+		}
 	}
 #endif
 
 	switch (psp) {
 #ifdef CONFIG_BATT_VERIFY_BY_DS28E16_PIPA
-	case POWER_SUPPLY_PROP_AUTHENTIC:
+		case POWER_SUPPLY_PROP_AUTHENTIC:
 		if (fg->fake_authentic != -EINVAL) {
 			pval->intval = fg->fake_authentic;
 			break;
@@ -5105,31 +5107,28 @@ static int fg_psy_get_property(struct power_supply *psy,
 
 		if (fg->max_verify_psy == NULL)
 			return -ENODATA;
-		if (fg->max_verify_slave_psy == NULL)
-			return -ENODATA;
-
+                if (fg->max_verify_slave_psy == NULL)
+                        return -ENODATA;
 		rc = power_supply_get_property(fg->max_verify_psy,
 					POWER_SUPPLY_PROP_AUTHEN_RESULT, &b_val);
-		chip->battery_authentic_result = b_val.intval;
-
-		rc = power_supply_get_property(fg->max_verify_slave_psy,
-					POWER_SUPPLY_PROP_AUTHEN_RESULT, &b_val);
-		chip->battery_authentic_slave_result = b_val.intval;
-		if (chip->battery_authentic_result == 1 &&
-		    chip->battery_authentic_slave_result == 1)
+                chip->battery_authentic_result = b_val.intval;
+                rc = power_supply_get_property(fg->max_verify_slave_psy,
+                                        POWER_SUPPLY_PROP_AUTHEN_RESULT, &b_val);
+                chip->battery_authentic_slave_result = b_val.intval;
+                if (chip->battery_authentic_result == 1 && chip->battery_authentic_slave_result == 1) {
 			pval->intval = 1;
-		else
+                } else {
 			pval->intval = 0;
-
+                }
 		break;
 	case POWER_SUPPLY_PROP_ROMID:
 		if (fg->max_verify_psy == NULL)
 			return -ENODATA;
 		if (fg->max_verify_slave_psy == NULL)
-			return -ENODATA;
+                        return -ENODATA;
 
 		rc = power_supply_get_property(fg->max_verify_psy,
-					POWER_SUPPLY_PROP_ROMID, &b_val);
+                                        POWER_SUPPLY_PROP_ROMID, &b_val);
 		memcpy(pval->arrayval, b_val.arrayval, 8);
 		memcpy(chip->ds_romid, b_val.arrayval, 8);
 		rc = power_supply_get_property(fg->max_verify_slave_psy,
@@ -5144,48 +5143,47 @@ static int fg_psy_get_property(struct power_supply *psy,
 		if (fg->max_verify_psy == NULL)
 			return -ENODATA;
 		if (fg->max_verify_slave_psy == NULL)
-			return -ENODATA;
+                        return -ENODATA;
 
 		rc = power_supply_get_property(fg->max_verify_psy,
 					POWER_SUPPLY_PROP_CHIP_OK, &b_val);
 		chip->battery_chip_ok = b_val.intval;
 		pval->intval = b_val.intval;
-		rc = power_supply_get_property(fg->max_verify_slave_psy,
-					POWER_SUPPLY_PROP_CHIP_OK, &b_val);
-		chip->battery_chip_slave_ok = b_val.intval;
-		if (chip->battery_chip_ok == 1 &&
-		    chip->battery_chip_slave_ok == 1)
+                rc = power_supply_get_property(fg->max_verify_slave_psy,
+                                        POWER_SUPPLY_PROP_CHIP_OK, &b_val);
+                chip->battery_chip_slave_ok = b_val.intval;
+                if (chip->battery_chip_ok == 1 && chip->battery_chip_slave_ok == 1) {
 			pval->intval = 1;
-		else
+                } else {
 			pval->intval = 0;
-
+		}
 		break;
 	case POWER_SUPPLY_PROP_DS_STATUS:
 		if (fg->max_verify_psy == NULL)
 			return -ENODATA;
 		if (fg->max_verify_slave_psy == NULL)
-			return -ENODATA;
+                        return -ENODATA;
 
 		rc = power_supply_get_property(fg->max_verify_psy,
 					POWER_SUPPLY_PROP_DS_STATUS, &b_val);
 		memcpy(pval->arrayval, b_val.arrayval, 8);
 		memcpy(chip->ds_status, b_val.arrayval, 8);
 		rc = power_supply_get_property(fg->max_verify_slave_psy,
-					POWER_SUPPLY_PROP_DS_STATUS, &b_val);
+                                        POWER_SUPPLY_PROP_DS_STATUS, &b_val);
 		memcpy(chip->ds_slave_status, b_val.arrayval, 8);
 		break;
 	case POWER_SUPPLY_PROP_PAGE0_DATA:
 		if (fg->max_verify_psy == NULL)
 			return -ENODATA;
 		if (fg->max_verify_slave_psy == NULL)
-			return -ENODATA;
+                        return -ENODATA;
 
 		rc = power_supply_get_property(fg->max_verify_psy,
 					POWER_SUPPLY_PROP_PAGE0_DATA, &b_val);
 		memcpy(pval->arrayval, b_val.arrayval, 16);
 		memcpy(chip->ds_page0, b_val.arrayval, 16);
 		rc = power_supply_get_property(fg->max_verify_slave_psy,
-					POWER_SUPPLY_PROP_PAGE0_DATA, &b_val);
+                                        POWER_SUPPLY_PROP_PAGE0_DATA, &b_val);
 		memcpy(chip->ds_slave_page0, b_val.arrayval, 16);
 		break;
 #endif
@@ -7050,13 +7048,12 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 	int last_batt_soc = fg->param.batt_soc;
 	int time_since_last_change_sec;
 	int last_smooth_batt_soc = fg->param.smooth_batt_soc;
-	int rc, soc_raw;
+	int rc,soc_raw;
 	int recharge_flag = 0;
 	int unit_time = 100;
 	int soc_delta;
 	union power_supply_propval pval = {0,};
 	struct timespec last_change_time = fg->param.last_soc_change_time;
-
 	rc = fg_gen4_get_prop_capacity_raw(chip, &pval.intval);
 	soc_raw = pval.intval;
 	soc_delta = abs(fg->param.batt_raw_soc - last_batt_soc);
@@ -7077,13 +7074,12 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 		else
 			delta_time = time_since_last_change_sec / 60;
 	} else {
-		if (soc_delta > 1 &&
-		    (fg->charge_status == POWER_SUPPLY_STATUS_DISCHARGING ||
-		     fg->charge_status == POWER_SUPPLY_STATUS_UNKNOWN))
+		if (soc_delta > 1 && (fg->charge_status == POWER_SUPPLY_STATUS_DISCHARGING ||fg->charge_status == POWER_SUPPLY_STATUS_UNKNOWN )) {
 			delta_time = time_since_last_change_sec / unit_time;
+		}
 		/* Calculated average current > 1000mA */
 		else if ((fg->param.batt_ma_avg > 1000000) ||
-			 (abs(fg->param.batt_raw_soc - fg->param.batt_soc) > 2))
+				(abs(fg->param.batt_raw_soc - fg->param.batt_soc) > 2))
 			/* Heavy loading current, ignore battery soc limit*/
 			delta_time = time_since_last_change_sec / 10;
 		else
@@ -7195,19 +7191,16 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 		}
 	}
 
-	if (fg->param.batt_temp > FFC_WARM_THRE ||
-	    fg->param.batt_temp < FFC_COLD_THRE)
+	if (fg->param.batt_temp > FFC_WARM_THRE || fg->param.batt_temp < FFC_COLD_THRE)
 		recharge_flag = 1;
 
-	if (recharge_flag) {
-		if ((fg->param.batt_temp < 460 &&
-		     fg->charge_type != POWER_SUPPLY_CHARGE_TYPE_FAST) ||
-		    (fg->param.batt_temp > 170 &&
-		     fg->charge_type != POWER_SUPPLY_CHARGE_TYPE_FAST)) {
+	if(recharge_flag) {
+		if((fg->param.batt_temp < 460 && fg->charge_type !=POWER_SUPPLY_CHARGE_TYPE_FAST)||
+		(fg->param.batt_temp > 170 && fg->charge_type !=POWER_SUPPLY_CHARGE_TYPE_FAST)) {
 			recharge_flag = 0;
 			power_supply_changed(fg->batt_psy);
+			}
 		}
-	}
 
 	/* if battery temperature is above critical high threshold, report it */
 	if (fg->param.batt_temp > CRITICAL_HIGH_TEMP) {
@@ -7216,9 +7209,8 @@ static void fg_battery_soc_smooth_tracking(struct fg_gen4_chip *chip)
 	}
 
 	pr_info("soc:%d, last_soc:%d, raw_soc:%d, soc_changed:%d, batt_ma:%d, smooth_low_batt_soc:%d, smooth_soc: %d\n",
-		fg->param.batt_soc, last_batt_soc, soc_raw, soc_changed,
-		fg->param.batt_ma, fg->param.smooth_low_batt_soc,
-		fg->param.smooth_batt_soc);
+				fg->param.batt_soc, last_batt_soc,
+				soc_raw, soc_changed, fg->param.batt_ma, fg->param.smooth_low_batt_soc, fg->param.smooth_batt_soc);
 }
 
 #define RESTART_FG_MONITOR_SOC_WAIT_PER_MS	30000
@@ -7310,7 +7302,7 @@ static void soc_monitor_work(struct work_struct *work)
 		pr_err("failed to get battery temperature, rc=%d\n", rc);
 
 	if (chip->dt.cutoff_voltage_adjust_enable) {
-		if (fg->param.batt_temp < LOW_DISCHARGE_TEMP_TRH) {
+		if (fg->param.batt_temp < LOW_DISCHARGE_TEMP_TRH ) {
 			chip->dt.cutoff_volt_mv = LOW_TEMP_CUTOFF_VOL_MV;
 			is_low_temp_flag = true;
 		} else {
@@ -7617,7 +7609,7 @@ static int fg_gen4_probe(struct platform_device *pdev)
 
 #ifdef CONFIG_BATT_VERIFY_BY_DS28E16_PIPA
 	fg->max_verify_psy = power_supply_get_by_name("batt_verify");
-	fg->max_verify_slave_psy = power_supply_get_by_name("batt_verify_slave");
+        fg->max_verify_slave_psy = power_supply_get_by_name("batt_verify_slave");
 #endif
 	/* Register the power supply */
 	fg_psy_cfg.drv_data = fg;
@@ -7800,9 +7792,8 @@ static int fg_gen4_resume(struct device *dev)
 	struct fg_gen4_chip *chip = dev_get_drvdata(dev);
 	struct fg_dev *fg = &chip->fg;
 	int val = 0;
-
 	if (!fg->input_present)
-		fg_get_batt_isense(fg, &val);
+	fg_get_batt_isense(fg, &val);
 
 	schedule_delayed_work(&chip->ttf->ttf_work, 0);
 	if (fg_sram_dump)

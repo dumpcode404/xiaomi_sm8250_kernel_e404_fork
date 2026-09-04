@@ -2,6 +2,7 @@
  * BQ25700 battery charging driver
  *
  * Copyright (C) 2017 Texas Instruments *
+ * Copyright (C) 2021 XiaoMi, Inc.
  * This package is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -42,10 +43,10 @@
 #include "bq25790_reg.h"
 #include "bq25790.h"
 
-#define	bq_info	pr_err
+#define	bq_info	pr_debug
 #define bq_dbg	pr_debug
-#define bq_err	pr_err
-#define bq_log	pr_err
+#define bq_err	pr_debug
+#define bq_log	pr_debug
 
 enum {
 	USER		= BIT(0),

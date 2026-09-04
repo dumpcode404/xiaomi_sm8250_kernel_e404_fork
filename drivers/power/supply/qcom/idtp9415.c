@@ -2171,14 +2171,6 @@ static void idtp9220_bpp_connect_load_work(struct work_struct *work)
 	struct idtp9220_device_info *di =
 		container_of(work, struct idtp9220_device_info,
 				bpp_connect_load_work.work);
-#ifdef CONFIG_FACTORY_BUILD
-	dev_info(di->dev, "[idt] factory build %s: \n", __func__);
-	idtp922x_set_pmi_icl(di, BPP_DEFAULT_CURRENT / 3);
-	msleep(300);
-	idtp922x_set_pmi_icl(di, (BPP_DEFAULT_CURRENT / 3) * 2);
-	msleep(300);
-	idtp922x_set_pmi_icl(di, BPP_DEFAULT_CURRENT);
-#else
 	int bpp_icl = 0;
 	int i = 0;
 	int vol = 0;
@@ -2253,7 +2245,6 @@ static void idtp9220_bpp_connect_load_work(struct work_struct *work)
 	if (i > 15)
 		di->bpp_icl = icl_max;
 	return;
-#endif
 #endif
 }
 
@@ -3909,7 +3900,6 @@ static void idtp9220_fw_download_work(struct work_struct *work)
 			//idt_fw_download_ret = FW_DL_OK;
 			dev_info(di->dev, "FW: 0x%x, crc: %d so skip upgrade\n", fw_app_ver[0], crc_ok);
 		} else {
-#ifndef CONFIG_FACTORY_BUILD
 			idtp9220_set_reverse_gpio(di, true);
 			msleep(100);
 			dev_info(di->dev, "%s: FW download start\n", __func__);
@@ -3929,9 +3919,6 @@ static void idtp9220_fw_download_work(struct work_struct *work)
 			else
 				dev_info(di->dev, "crc verify success.\n");
 			idtp9220_set_reverse_gpio(di, false);
-#else
-			dev_info(di->dev, "%s: factory build, don't update\n", __func__);
-#endif
 		}
 		di->fw_update = false;
 		pm_relax(di->dev);
@@ -4175,11 +4162,7 @@ reverse_out:
 						recive_data[2] == 0x1 &&
 						recive_data[3] == 0x4 &&
 						((recive_data[1] == 0x9) || (recive_data[1] == 0x1))) {
-#ifdef CONFIG_FACTORY_BUILD
-					di->is_ble_tx = 0;
-#else
 					di->is_ble_tx = 1;
-#endif
 				} else if (recive_data[4] == 0x01 &&
 						recive_data[2] == 0x2 &&
 						recive_data[3] == 0x8 &&
