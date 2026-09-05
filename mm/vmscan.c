@@ -3166,7 +3166,7 @@ static bool positive_ctrl_err(struct ctrl_pos *sp, struct ctrl_pos *pv)
  *                          the aging
  ******************************************************************************/
 
-static int page_update_gen(struct page *page, int gen, unsigned long vm_flags)
+static int page_update_gen(struct page *page, int gen, int *type, unsigned long vm_flags)
 {
 	unsigned long new_flags, old_flags;
 
@@ -3198,6 +3198,7 @@ static int page_update_gen(struct page *page, int gen, unsigned long vm_flags)
 		new_flags |= (gen + 1UL) << LRU_GEN_PGOFF;
 	} while (cmpxchg(&page->flags, old_flags, new_flags) != old_flags);
 
+	*type = page_flags_is_file_cache(&old_flags);
 	return ((old_flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
 }
 
@@ -3233,9 +3234,8 @@ static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaimin
 }
 
 static void update_batch_size(struct lru_gen_mm_walk *walk, struct page *page,
-			      int old_gen, int new_gen)
+			      int old_gen, int new_gen, int type)
 {
-	int type = page_is_file_cache(page);
 	int zone = page_zonenum(page);
 	int delta = hpage_nr_pages(page);
 
@@ -3418,6 +3418,7 @@ static bool walk_pte_range(pmd_t *pmd, unsigned long start, unsigned long end,
 	struct mem_cgroup *memcg = lruvec_memcg(priv->lruvec);
 	struct pglist_data *pgdat = lruvec_pgdat(priv->lruvec);
 	int old_gen, new_gen = lru_gen_from_seq(priv->max_seq);
+	int type;
 
 	VM_WARN_ON_ONCE(pmd_trans_huge(*pmd) || pmd_devmap(*pmd));
 
@@ -3460,9 +3461,9 @@ restart:
 		    !(PageAnon(page) && PageSwapBacked(page) && !PageSwapCache(page)))
 			set_page_dirty(page);
 
-		old_gen = page_update_gen(page, new_gen, walk->vma->vm_flags);
+		old_gen = page_update_gen(page, new_gen, &type, walk->vma->vm_flags);
 		if (old_gen >= 0 && old_gen != new_gen)
-			update_batch_size(priv, page, old_gen, new_gen);
+			update_batch_size(priv, page, old_gen, new_gen, type);
 	}
 
 	if (i < PTRS_PER_PTE && get_next_vma(walk, PMD_MASK, PAGE_SIZE, &start, &end))
@@ -3487,6 +3488,7 @@ static void walk_pmd_range_locked(pud_t *pud, unsigned long next, struct vm_area
 	struct mem_cgroup *memcg = lruvec_memcg(priv->lruvec);
 	struct pglist_data *pgdat = lruvec_pgdat(priv->lruvec);
 	int old_gen, new_gen = lru_gen_from_seq(priv->max_seq);
+	int type;
 
 	VM_WARN_ON_ONCE(pud_trans_huge(*pud) || pud_devmap(*pud));
 
@@ -3539,9 +3541,9 @@ static void walk_pmd_range_locked(pud_t *pud, unsigned long next, struct vm_area
 		    !(PageAnon(page) && PageSwapBacked(page) && !PageSwapCache(page)))
 			set_page_dirty(page);
 
-		old_gen = page_update_gen(page, new_gen, vma->vm_flags);
+		old_gen = page_update_gen(page, new_gen, &type, vma->vm_flags);
 		if (old_gen >= 0 && old_gen != new_gen)
-			update_batch_size(priv, page, old_gen, new_gen);
+			update_batch_size(priv, page, old_gen, new_gen, type);
 next:
 		i = i > MIN_LRU_BATCH ? 0 :
 		    find_next_bit(bitmap, MIN_LRU_BATCH, i) + 1;
@@ -4165,6 +4167,7 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	struct lruvec *lruvec = mem_cgroup_lruvec(pgdat, memcg);
 	DEFINE_MAX_SEQ(lruvec);
 	int old_gen, new_gen = lru_gen_from_seq(max_seq);
+	int type;
 
 	lockdep_assert_held(pvmw->ptl);
 	VM_WARN_ON_ONCE_PAGE(PageLRU(page), page);
@@ -4264,12 +4267,12 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 		if (!page_is_file_cache(page) && !can_swap)
 			continue;
 
-		old_gen = page_update_gen(page, new_gen, vma->vm_flags);
+		old_gen = page_update_gen(page, new_gen, &type, vma->vm_flags);
 		if (old_gen < 0 || old_gen == new_gen)
 			continue;
 
 		if (walk)
-			update_batch_size(walk, page, old_gen, new_gen);
+			update_batch_size(walk, page, old_gen, new_gen, type);
 		else
 			lru_gen_update_size(lruvec, page, old_gen, new_gen);
 	}

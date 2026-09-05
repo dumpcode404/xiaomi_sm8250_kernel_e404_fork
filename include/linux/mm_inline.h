@@ -23,6 +23,17 @@ static inline int page_is_file_cache(struct page *page)
 	return !PageSwapBacked(page);
 }
 
+/**
+ * page_flags_is_file_cache - should the page be on a file LRU or anon LRU?
+ * @flags: the page flags to test
+ *
+ * Just like page_is_file_cache() but takes the page flags directly instead.
+ */
+static inline int page_flags_is_file_cache(const unsigned long *flags)
+{
+	return !test_bit(PG_swapbacked, flags);
+}
+
 static __always_inline void __update_lru_size(struct lruvec *lruvec,
 				enum lru_list lru, enum zone_type zid,
 				int nr_pages)
