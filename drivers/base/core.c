@@ -1721,8 +1721,9 @@ static ssize_t online_store(struct device *dev, struct device_attribute *attr,
 {
 	bool val;
 	int ret;
+	extern atomic_t switch_mode;
 
-	if (from_kuid_munged(current_user_ns(), current_uid()) == 1000)
+	if (!atomic_read(&switch_mode))
 		return -EPERM;
 
 	ret = strtobool(buf, &val);
