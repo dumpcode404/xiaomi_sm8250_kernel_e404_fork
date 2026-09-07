@@ -710,6 +710,12 @@ static ssize_t store_##file_name					\
 	if (&policy->object == &policy->min)				\
 		return count;						\
 									\
+	if (&policy->object == &policy->max) {				\
+		extern atomic_t switch_mode;				\
+		if (!atomic_read(&switch_mode))				\
+			return -EPERM;					\
+	}								\
+									\
 	memcpy(&new_policy, policy, sizeof(*policy));			\
 	new_policy.min = policy->user_policy.min;			\
 	new_policy.max = policy->user_policy.max;			\
