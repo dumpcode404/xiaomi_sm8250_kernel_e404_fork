@@ -69,7 +69,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 	short i = 0;
 
 	/* Skip throttling entirely during the first 120s of boot */
-	if (unlikely(ktime_get_boot_ns() < 120ULL * NSEC_PER_SEC)) {
+	if (unlikely(ktime_get_boottime_ns() < 120ULL * NSEC_PER_SEC)) {
 		old_zone = t->curr_zone;
 		if (old_zone) {
 			t->curr_zone = NULL;
