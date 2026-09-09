@@ -8,6 +8,7 @@
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/moduleparam.h>
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
