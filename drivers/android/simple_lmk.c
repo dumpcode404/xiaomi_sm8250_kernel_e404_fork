@@ -8,7 +8,6 @@
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
-#include <linux/mmap_lock.h>
 #include <linux/moduleparam.h>
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
@@ -349,7 +348,7 @@ static struct mm_struct *next_reap_victim(void)
 			continue;
 
 		/* Do a trylock so the reaper thread doesn't sleep */
-		if (!mmap_read_trylock(mm)) {
+		if (!down_read_trylock(&mm->mmap_sem)) {
 			should_retry = true;
 			continue;
 		}
@@ -365,7 +364,7 @@ static struct mm_struct *next_reap_victim(void)
 		 */
 		if (!test_bit(MMF_OOM_SKIP, &mm->flags))
 			break;
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 	}
 
 	if (!mm) {
@@ -404,7 +403,7 @@ static void reap_victims(void)
 			clear_bit(MMF_OOM_VICTIM, &mm->flags);
 			set_bit(MMF_OOM_SKIP, &mm->flags);
 		}
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 	}
 }
 
