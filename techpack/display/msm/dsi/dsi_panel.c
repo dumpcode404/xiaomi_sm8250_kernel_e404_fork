@@ -1861,6 +1861,23 @@ static int dsi_panel_parse_dfps_caps(struct dsi_panel *panel)
 
 	dfps_caps->dfps_list_len = utils->count_u32_elems(utils->data,
 				  "qcom,dsi-supported-dfps-list");
+
+#ifdef CONFIG_BOARD_APOLLO
+	if (e404_data.dtbo_type == 2 ) {
+		static const u32 miui_dfps_list[] = { 144,120, 90, 60 };
+		dfps_caps->dfps_list_len = ARRAY_SIZE(miui_dfps_list);
+		dfps_caps->dfps_list = kcalloc(dfps_caps->dfps_list_len,
+                                    sizeof(u32), GFP_KERNEL);
+		if (!dfps_caps->dfps_list) {
+			rc = -ENOMEM;
+			goto error;
+		}
+		memcpy(dfps_caps->dfps_list, miui_dfps_list,
+				dfps_caps->dfps_list_len * sizeof(u32));
+		dfps_caps->dfps_support = true;
+	}
+#endif
+
 	if (dfps_caps->dfps_list_len < 1) {
 		DSI_ERR("[%s] dfps refresh list not present\n", name);
 		rc = -EINVAL;

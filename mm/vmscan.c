@@ -177,7 +177,7 @@ struct scan_control {
 /*
  * From 0 .. 100.  Higher means more swappy.
  */
-int vm_swappiness = 80;
+int vm_swappiness = 85;
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.
@@ -696,6 +696,9 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 {
 	unsigned long ret, freed = 0;
 	struct shrinker *shrinker;
+
+	if (task_is_critical())
+		return 0;
 
 	/*
 	 * The root memcg might be allocated even though memcg is disabled
@@ -5869,19 +5872,6 @@ static bool allow_direct_reclaim(pg_data_t *pgdat, bool using_kswapd)
 	}
 
 	return wmark_ok;
-}
-
-#define CRITICAL_OOM_SCORE_ADJ	(-900)
-
-static __always_inline bool task_is_critical(void)
-{
-	if (current->flags & PF_KTHREAD)
-		return false;
-
-	if (unlikely(!current->signal))
-		return false;
-
-	return READ_ONCE(current->signal->oom_score_adj) <= CRITICAL_OOM_SCORE_ADJ;
 }
 
 /*

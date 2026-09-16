@@ -79,14 +79,7 @@ config E404_ATTRIBUTES
  	  Enabling this require needed files of e404_attributes.c and e404_attributes.h
 	  Allow to build kernel with E404 attributes and sysfs features.
 
-config E404_OPLUS
-	bool "Build E404 with support for Oplus Rom"
-	default n
-	select OPLUS_OPROJECT
-	select OPLUS_NANDSWAP
-	depends on E404_ATTRIBUTES
-
-config E404_MIUI
+config E404_MIUI_DTBO_DEFAULT
 	bool "Set DTBO for for MIUI/Hyperos rom as default"
 	default n
 	depends on E404_ATTRIBUTES

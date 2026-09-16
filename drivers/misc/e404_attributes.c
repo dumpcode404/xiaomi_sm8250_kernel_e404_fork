@@ -7,12 +7,12 @@ int early_effcpu = 1;
 #else
 int early_effcpu = 0;
 #endif
-#ifdef CONFIG_E404_MIUI
+#ifdef CONFIG_E404_MIUI_DTBO_DEFAULT
 int early_rom_type = 2;
 #else
 int early_rom_type = 1;
 #endif
-#ifdef CONFIG_E404_MIUI
+#ifdef CONFIG_E404_MIUI_DTBO_DEFAULT
 int early_dtbo_type = 2;
 #else
 int early_dtbo_type = 1;
