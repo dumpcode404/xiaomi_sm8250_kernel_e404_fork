@@ -541,9 +541,9 @@ int suspend_devices_and_enter(suspend_state_t state)
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
-		pr_err("Some devices failed to suspend, or early wake event detected\n");
-		log_suspend_abort_reason(
-				"Some devices failed to suspend, or early wake event detected");
+		pr_debug("Some devices failed to suspend, or early wake event detected\n");
+		// log_suspend_abort_reason(
+				// "Some devices failed to suspend, or early wake event detected");
 		goto Recover_platform;
 	}
 	suspend_test_finish("suspend devices");
@@ -616,9 +616,9 @@ static int enter_state(suspend_state_t state)
 
 #ifndef CONFIG_SUSPEND_SKIP_SYNC
 	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
-	pr_info("Syncing filesystems ... ");
+	pr_debug("Syncing filesystems ... ");
 	ksys_sync();
-	pr_cont("done.\n");
+	pr_debug("done.\n");
 	trace_suspend_resume(TPS("sync_filesystems"), 0, false);
 #endif
 
@@ -660,7 +660,7 @@ int pm_suspend(suspend_state_t state)
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
 
-	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
+	pr_debug("suspend entry (%s)\n", mem_sleep_labels[state]);
 	qcom_smem_state_update_bits(smem_state, AWAKE_BIT, 0);
 	error = enter_state(state);
 	qcom_smem_state_update_bits(smem_state, AWAKE_BIT, AWAKE_BIT);
@@ -670,7 +670,7 @@ int pm_suspend(suspend_state_t state)
 	} else {
 		suspend_stats.success++;
 	}
-	pr_info("suspend exit\n");
+	pr_debug("suspend exit\n");
 	return error;
 }
 EXPORT_SYMBOL(pm_suspend);
