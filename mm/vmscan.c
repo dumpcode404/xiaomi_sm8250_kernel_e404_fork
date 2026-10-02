@@ -1055,6 +1055,16 @@ static enum page_references page_check_references(struct page *page,
 	if (referenced_ptes == -1)
 		return PAGEREF_KEEP;
 
+	if (lru_gen_enabled()) {
+		if (test_and_clear_bit(PG_willneed_hint, &page->flags))
+			return PAGEREF_ACTIVATE;
+
+		if (!referenced_ptes)
+			return PAGEREF_RECLAIM;
+
+		return lru_gen_set_refs(page, vm_flags) ? PAGEREF_ACTIVATE : PAGEREF_KEEP;
+	}
+
 	if (referenced_ptes) {
 		if (PageSwapBacked(page))
 			return PAGEREF_ACTIVATE;
