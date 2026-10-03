@@ -79,6 +79,16 @@ jobs:
 
           echo "PATH=$PATH" >> $GITHUB_ENV
 
+      - name: Setup KernelSU
+        working-directory: kernel
+        run: |
+          echo "=== Setup KernelSU ==="
+
+          curl -LSs https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash -
+
+          echo "=== Verify KernelSU ==="
+          grep -R "KernelSU" -n drivers 2>/dev/null | head || true
+
       - name: Build Kernel
         working-directory: kernel
         run: |
