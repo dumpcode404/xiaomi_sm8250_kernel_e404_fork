@@ -183,7 +183,6 @@ struct fts_ts_data {
 	struct delayed_work esdcheck_work;
 	struct delayed_work prc_work;
 	struct work_struct resume_work;
-	struct delayed_work report_rate_work;
 	struct ftxxxx_proc proc;
 	spinlock_t irq_lock;
 	struct mutex report_mutex;
@@ -203,7 +202,6 @@ struct fts_ts_data {
 	bool glove_mode;
 	bool cover_mode;
 	bool charger_mode;
-	u8 report_rate;
 	bool gesture_mode; /* gesture enable or disable, default: disable */
 	/* multi-touch */
 	struct ts_event *events;
