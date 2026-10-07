@@ -196,6 +196,39 @@ void __delete_from_swap_cache(struct page *page, swp_entry_t entry,
 	ADD_CACHE_INFO(del_total, nr);
 }
 
+/*
+ * Drop shadow entries left in the swap cache for swap slots [begin, end]
+ * that were just freed, so a reused slot cannot hand a stale shadow to
+ * workingset_refault() and shadow-only nodes do not pile up.
+ */
+void clear_shadow_from_swap_cache(int type, unsigned long begin,
+				  unsigned long end)
+{
+	unsigned long curr = begin;
+	void *old;
+
+	for (;;) {
+		swp_entry_t entry = swp_entry(type, curr);
+		struct address_space *address_space = swap_address_space(entry);
+		XA_STATE(xas, &address_space->i_pages, curr);
+
+		xa_lock_irq(&address_space->i_pages);
+		xas_for_each(&xas, old, end) {
+			if (!xa_is_value(old))
+				continue;
+			xas_store(&xas, NULL);
+		}
+		xa_unlock_irq(&address_space->i_pages);
+
+		/* search the next swapcache until we meet end */
+		curr >>= SWAP_ADDRESS_SPACE_SHIFT;
+		curr++;
+		curr <<= SWAP_ADDRESS_SPACE_SHIFT;
+		if (curr > end)
+			break;
+	}
+}
+
 /**
  * add_to_swap - allocate swap space for a page
  * @page: page we want to move to swap
