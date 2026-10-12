@@ -580,35 +580,9 @@ static struct cpufreq_driver cpufreq_qcom_hw_driver = {
 	.attr		= qcom_cpufreq_hw_attr,
 	.boost_enabled	= true,
 	.ready		= qcom_cpufreq_ready,
+	.online		= qcom_cpufreq_hw_cpu_online,
+	.offline	= qcom_cpufreq_hw_cpu_offline,
 	.exit		= qcom_cpufreq_exit,
-};
-
-/*
- * 4.19's struct cpufreq_driver has no .online/.offline hooks (added in
- * 5.x). Route the LMh IRQ management through the CPUFREQ policy
- * notifier instead: CPUFREQ_CREATE_POLICY fires from cpufreq_online()
- * and CPUFREQ_REMOVE_POLICY from policy_free() (see 0870e2ae8), which
- * matches the online/offline semantics closely enough for LMh.
- */
-static int qcom_cpufreq_hw_policy_notifier(struct notifier_block *nb,
-					   unsigned long event, void *data)
-{
-	struct cpufreq_policy *policy = data;
-
-	switch (event) {
-	case CPUFREQ_CREATE_POLICY:
-		qcom_cpufreq_hw_cpu_online(policy);
-		break;
-	case CPUFREQ_REMOVE_POLICY:
-		qcom_cpufreq_hw_cpu_offline(policy);
-		break;
-	}
-
-	return NOTIFY_OK;
-}
-
-static struct notifier_block qcom_cpufreq_hw_policy_nb = {
-	.notifier_call = qcom_cpufreq_hw_policy_notifier,
 };
 
 static int cpuhp_qcom_online(unsigned int cpu)
@@ -1089,20 +1063,11 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu)
 		spin_lock_init(&qcom_cpufreq_counter[cpu].lock);
 
-	/*
-	 * Register before cpufreq_register_driver() so boot-time policies
-	 * also go through the online path (mirrors 5.x .online semantics).
-	 */
-	rc = cpufreq_register_notifier(&qcom_cpufreq_hw_policy_nb,
-				       CPUFREQ_POLICY_NOTIFIER);
-	if (rc)
-		dev_err(&pdev->dev, "CPUFreq policy notifier register failed\n");
-
+	/* Core now provides native .online/.offline hooks (07f37588),
+	 * driver uses them directly; no policy notifier needed. */
 	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
 	if (rc) {
 		dev_err(&pdev->dev, "CPUFreq HW driver failed to register\n");
-		cpufreq_unregister_notifier(&qcom_cpufreq_hw_policy_nb,
-					    CPUFREQ_POLICY_NOTIFIER);
 		return rc;
 	}
 
