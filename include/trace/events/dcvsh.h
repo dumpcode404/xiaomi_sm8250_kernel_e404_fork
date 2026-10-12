@@ -29,6 +29,27 @@ TRACE_EVENT(dcvsh_freq,
 	TP_printk("cpu:%lu max frequency:%lu", __entry->cpu, __entry->freq)
 );
 
+TRACE_EVENT(dcvsh_throttle,
+
+	TP_PROTO(unsigned long cpu, bool state),
+
+	TP_ARGS(cpu, state),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, cpu)
+		__field(bool, state)
+	),
+
+	TP_fast_assign(
+		__entry->cpu = cpu;
+		__entry->state = state;
+	),
+
+	TP_printk("cpu:%lu throttle_%s",
+		__entry->cpu,
+		__entry->state ? "begin" : "end")
+);
+
 #endif /* _TRACE_DCVSH_H */
 
 /* This part must be outside protection */
