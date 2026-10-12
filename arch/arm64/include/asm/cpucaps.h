@@ -65,6 +65,5 @@
 
 /* kabi: reserve 43 - 64 for future cpu capabilities */
 #define ARM64_NCAPS                             64
->>>>>>> BACKPORT: arm64: add support for the AMU extension v1
 
 #endif /* __ASM_CPUCAPS_H */

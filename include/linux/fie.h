@@ -6,7 +6,15 @@
 #ifndef _FIE_H_
 #define _FIE_H_
 
+#include <linux/cpumask.h>
+#include <linux/types.h>
+
 struct rq;
+
+struct fie_rate_info {
+	u64 set_time;
+	unsigned int freq;
+};
 
 void fie_update_rq_clock(struct rq *rq);
 void fie_init_cpu_domain(const struct cpumask *cpus, unsigned int max_freq);
