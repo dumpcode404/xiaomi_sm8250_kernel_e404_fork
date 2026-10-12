@@ -1089,16 +1089,22 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu)
 		spin_lock_init(&qcom_cpufreq_counter[cpu].lock);
 
-	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
-	if (rc) {
-		dev_err(&pdev->dev, "CPUFreq HW driver failed to register\n");
-		return rc;
-	}
-
+	/*
+	 * Register before cpufreq_register_driver() so boot-time policies
+	 * also go through the online path (mirrors 5.x .online semantics).
+	 */
 	rc = cpufreq_register_notifier(&qcom_cpufreq_hw_policy_nb,
 				       CPUFREQ_POLICY_NOTIFIER);
 	if (rc)
 		dev_err(&pdev->dev, "CPUFreq policy notifier register failed\n");
+
+	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
+	if (rc) {
+		dev_err(&pdev->dev, "CPUFreq HW driver failed to register\n");
+		cpufreq_unregister_notifier(&qcom_cpufreq_hw_policy_nb,
+					    CPUFREQ_POLICY_NOTIFIER);
+		return rc;
+	}
 
 	rc = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE, "qcom-cpufreq:online",
 				       cpuhp_qcom_online, NULL);
