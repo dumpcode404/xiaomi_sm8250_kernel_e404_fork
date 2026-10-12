@@ -8,7 +8,8 @@
 #include <linux/perf_event.h>
 #include <linux/reboot.h>
 #include <linux/sched/topology.h>
-#include <linux/units.h>
+/* NOTE: linux/units.h does not exist on 4.19; NSEC_PER_USEC comes from
+ * linux/time.h. The include was dropped in the test-fie port. */
 #include <asm/arch_timer.h>
 #include <asm/cputype.h>
 #include <asm/perf_event.h>
