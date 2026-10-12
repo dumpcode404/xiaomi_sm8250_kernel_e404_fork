@@ -81,6 +81,7 @@ struct cpufreq_qcom {
 	unsigned long xo_rate;
 	unsigned long cpu_hw_rate;
 	unsigned long dcvsh_freq_limit;
+	unsigned long last_lmh_freq;
 	struct delayed_work freq_poll_work;
 	struct mutex dcvsh_lock;
 	struct device_attribute freq_limit_attr;
@@ -176,6 +177,22 @@ static unsigned long limits_mitigation_notify(struct cpufreq_qcom *c,
 
 	arch_set_thermal_pressure(&c->related_cpus, max_t(unsigned long, 0,
 				  max_capacity - capacity));
+
+	/*
+	 * Adapted from re-noroi c828914f9: route the LMh-reported limit
+	 * through FIE's thermal pressure aggregation (combined with FIE's
+	 * own HW-throttle measurement). Skip redundant updates when the
+	 * reported limit hasn't changed. E404's direct arch_set_thermal_
+	 * pressure() above is kept so scheduler behavior is unchanged
+	 * even if FIE has no domain data for these CPUs yet.
+	 */
+	if (policy && c->last_lmh_freq != freq) {
+		c->last_lmh_freq = freq;
+		fie_cpufreq_pressure(cpu,
+				     freq >= policy->cpuinfo.max_freq ?
+				     UINT_MAX : (unsigned int)freq);
+	}
+
 	trace_dcvsh_freq(cpumask_first(&c->related_cpus), freq);
 	c->dcvsh_freq_limit = freq;
 
@@ -310,14 +327,19 @@ qcom_cpufreq_hw_target_index(struct cpufreq_policy *policy,
 {
 	struct cpufreq_qcom *c = policy->driver_data;
 	unsigned long flags;
+	unsigned long freq = policy->freq_table[index].frequency;
 
 	if (c->skip_data.skip && index == c->skip_data.high_temp_index) {
 		spin_lock_irqsave(&c->skip_data.lock, flags);
 		writel_relaxed(c->skip_data.final_index,
 				c->reg_bases[REG_PERF_STATE]);
+		fie_rate_set(policy->cpu, freq); /* Added for FIE */
 		spin_unlock_irqrestore(&c->skip_data.lock, flags);
 	} else {
+		local_irq_save(flags);
 		writel_relaxed(index, c->reg_bases[REG_PERF_STATE]);
+		fie_rate_set(policy->cpu, freq); /* Added for FIE */
+		local_irq_restore(flags);
 	}
 
 	return 0;
@@ -424,6 +446,7 @@ static int qcom_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 		c->freq_limit_attr.show = dcvsh_freq_limit_show;
 		c->freq_limit_attr.attr.mode = 0444;
 		c->dcvsh_freq_limit = U32_MAX;
+		c->last_lmh_freq = ULONG_MAX;
 		device_create_file(cpu_dev, &c->freq_limit_attr);
 	}
 
@@ -496,6 +519,7 @@ static int qcom_cpufreq_hw_cpu_online(struct cpufreq_policy *policy)
 
 	mutex_lock(&c->dcvsh_lock);
 	c->cancel_throttle = false;
+	c->last_lmh_freq = ULONG_MAX;
 	mutex_unlock(&c->dcvsh_lock);
 
 	irq_set_affinity_hint(c->dcvsh_irq, &c->related_cpus);
@@ -535,6 +559,8 @@ static int qcom_cpufreq_hw_cpu_offline(struct cpufreq_policy *policy)
 		disable_irq(c->dcvsh_irq);
 
 	arch_update_thermal_pressure(&c->related_cpus, policy->cpuinfo.max_freq);
+	fie_cpufreq_pressure(cpumask_first(&c->related_cpus), UINT_MAX);
+	c->last_lmh_freq = ULONG_MAX;
 	trace_dcvsh_throttle(cpumask_first(&c->related_cpus), 0);
 
 	return 0;
