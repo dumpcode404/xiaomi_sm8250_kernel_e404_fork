@@ -175,8 +175,10 @@ struct scan_control {
 
 /*
  * From 0 .. 100.  Higher means more swappy.
+ * E404: 100 for Android + ZRAM + MGLRU to balance anon/file
+ * and avoid file thrash -> sudden anon swap storm (stutter).
  */
-int vm_swappiness = 40;
+int vm_swappiness = 100;
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.
@@ -3843,16 +3845,32 @@ next:
 	return success;
 }
 
-static void inc_max_seq(struct lruvec *lruvec, bool can_swap, bool force_scan)
+static bool inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
+			bool can_swap, bool force_scan)
 {
+	bool success = true;
 	int prev, next;
 	int type, zone;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 restart:
+	/*
+	 * Port of gustarmartins 0ebee38: aging is prepared without the LRU
+	 * lock. A second aging caller (or forced debugfs scan) can advance
+	 * max_seq while inc_min_seq() yields. Never update compatibility
+	 * LRU sizes for a generation other than the one whose page tables
+	 * this caller just walked.
+	 */
+	if (max_seq != READ_ONCE(lrugen->max_seq))
+		return false;
+
 	spin_lock_irq(&pgdat->lru_lock);
 
 	VM_WARN_ON_ONCE(!seq_is_valid(lruvec));
+	if (max_seq != READ_ONCE(lrugen->max_seq)) {
+		success = false;
+		goto unlock;
+	}
 
 	for (type = ANON_AND_FILE - 1; type >= 0; type--) {
 		if (get_nr_gens(lruvec, type) != MAX_NR_GENS)
@@ -3899,7 +3917,9 @@ restart:
 	/* make sure preceding modifications appear */
 	smp_store_release(&lrugen->max_seq, lrugen->max_seq + 1);
 
+unlock:
 	spin_unlock_irq(&pgdat->lru_lock);
+	return success;
 }
 
 static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
@@ -3948,8 +3968,14 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
 
 	clear_mm_walk();
 done:
-	if (success)
-		inc_max_seq(lruvec, can_swap, force_scan);
+	if (success) {
+		/* Port of gustarmartins 0ebee38: only wake flushers if this
+		 * caller actually advanced max_seq (no concurrent advancer).
+		 */
+		success = inc_max_seq(lruvec, max_seq, can_swap, force_scan);
+		if (success)
+			wakeup_flusher_threads(WB_REASON_VMSCAN);
+	}
 
 	return success;
 }
@@ -4049,8 +4075,12 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc,
 	return true;
 }
 
-/* to protect the working set of the last N jiffies */
-static unsigned long lru_gen_min_ttl __read_mostly = 250;
+/* to protect the working set of the last N jiffies
+ * E404: default 0 on mobile to avoid aging stalls under
+ * medium-high pressure (stutter). Tunable via
+ * /sys/kernel/mm/lru_gen/min_ttl_ms if working set needs protection.
+ */
+static unsigned long lru_gen_min_ttl __read_mostly = 0;
 
 static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 {
@@ -4219,6 +4249,15 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	for_each_set_bit(i, bitmap, MIN_LRU_BATCH) {
 		page = compound_head(pte_page(pte[i]));
 		if (page_memcg_rcu(page) != memcg)
+			continue;
+
+		/*
+		 * Port of gustarmartins 0ebee38: a file VMA can contain
+		 * anonymous COW pages. When eviction cannot swap, promoting
+		 * those here would clear young bits without making them
+		 * reclaimable.
+		 */
+		if (!page_is_file_cache(page) && !can_swap)
 			continue;
 
 		old_gen = page_update_gen(page, new_gen, vma->vm_flags);
@@ -4625,8 +4664,14 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc,
 	if (current_is_kswapd())
 		return 0;
 
-	if (try_to_inc_max_seq(lruvec, max_seq, can_swap, false))
-		return nr_to_scan;
+	/*
+	 * E404: direct reclaim must not stall on page-table walks.
+	 * walk_mm() in try_to_inc_max_seq() scans all mm's and takes
+	 * mmap_sem, which spikes allocation latency -> UI stutter on
+	 * medium-high usage. Leave aging to kswapd, only evict
+	 * already-aged generations here.
+	 */
+	goto done;
 
 done:
 	return min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
