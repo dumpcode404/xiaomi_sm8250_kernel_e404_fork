@@ -558,7 +558,9 @@ static int qcom_cpufreq_hw_cpu_offline(struct cpufreq_policy *policy)
 	if (!irqd_irq_disabled(irq_get_irq_data(c->dcvsh_irq)))
 		disable_irq(c->dcvsh_irq);
 
-	arch_update_thermal_pressure(&c->related_cpus, policy->cpuinfo.max_freq);
+	/* Routed through FIE aggregation (covers both cpufreq + HW-throttle
+	 * sources); no direct arch_update_thermal_pressure() needed here
+	 * per review feedback. */
 	fie_cpufreq_pressure(cpumask_first(&c->related_cpus), UINT_MAX);
 	c->last_lmh_freq = ULONG_MAX;
 	trace_dcvsh_throttle(cpumask_first(&c->related_cpus), 0);
