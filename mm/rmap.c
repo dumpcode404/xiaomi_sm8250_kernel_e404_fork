@@ -787,13 +787,14 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 						pvmw.pte)) {
 				/*
 				 * Don't treat a reference through
-				 * a sequentially read mapping as such.
-				 * If the page has been used in another mapping,
-				 * we will catch it; if this other mapping is
-				 * already gone, the unmap path will have set
+				 * a sequentially or randomly read mapping as
+				 * such (no temporal locality). If the page
+				 * has been used in another mapping, we will
+				 * catch it; if this other mapping is already
+				 * gone, the unmap path will have set
 				 * PG_referenced or activated the page.
 				 */
-				if (likely(!(vma->vm_flags & VM_SEQ_READ)))
+				if (likely(vma_has_recency(vma)))
 					referenced++;
 			}
 		} else if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE)) {
@@ -828,6 +829,14 @@ static bool invalid_page_referenced_vma(struct vm_area_struct *vma, void *arg)
 {
 	struct page_referenced_arg *pra = arg;
 	struct mem_cgroup *memcg = pra->memcg;
+
+	/*
+	 * Port of re-noroi 6630eb89e: ignore references from mappings
+	 * with no recency. Kept gated to the memcg path as in this tree
+	 * (upstream sets invalid_vma unconditionally).
+	 */
+	if (!vma_has_recency(vma))
+		return true;
 
 	if (!mm_match_cgroup(vma->vm_mm, memcg))
 		return true;
