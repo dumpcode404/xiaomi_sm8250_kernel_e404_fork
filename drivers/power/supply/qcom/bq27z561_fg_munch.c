@@ -990,10 +990,6 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 				&& (status == POWER_SUPPLY_STATUS_CHARGING)) {
 			unit_time = 40000;
 			calc_delta_time(last_change_time, &change_delta);
-			if (change_delta < 0) {
-				last_change_time = ktime_get();
-				delta_time = 0;
-			}
 			delta_time = change_delta / unit_time;
 			soc_changed = min(1, delta_time);
 			if (soc_changed) {
@@ -1013,10 +1009,6 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 			unit_time = 10000;
 			calc_delta_time(last_change_time, &change_delta);
 			delta_time = change_delta / unit_time;
-			if (delta_time < 0) {
-				last_change_time = ktime_get();
-				delta_time = 0;
-			}
 			soc_changed = min(1, delta_time);
 			if (soc_changed) {
 				bq_dbg(PR_OEM, "soc reduce changed = %d\n", soc_changed);
@@ -1041,10 +1033,6 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 			calc_delta_time(last_change_time, &change_delta);
 			unit_time = 10000;
 			delta_time = change_delta / unit_time;
-			if (delta_time < 0) {
-				last_change_time = ktime_get();
-				delta_time = 0;
-			}
 			soc_changed = min(1, delta_time);
 			if(soc_changed){
 				last_change_time = ktime_get();
