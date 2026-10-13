@@ -35,7 +35,7 @@ static void dwc3_otg_clear_events(struct dwc3 *dwc)
 {
 	u32 reg = dwc3_readl(dwc->regs, DWC3_OEVT);
 
-	dwc3_writel(dwc->regs, DWC3_OEVTEN, reg);
+	dwc3_writel(dwc->regs, DWC3_OEVT, reg);
 }
 
 #define DWC3_OTG_ALL_EVENTS	(DWC3_OEVTEN_XHCIRUNSTPSETEN | \
@@ -51,14 +51,15 @@ static void dwc3_otg_clear_events(struct dwc3 *dwc)
 static irqreturn_t dwc3_otg_thread_irq(int irq, void *_dwc)
 {
 	struct dwc3 *dwc = _dwc;
+	unsigned long flags;
 
-	spin_lock(&dwc->lock);
+	spin_lock_irqsave(&dwc->lock, flags);
 	if (dwc->otg_restart_host) {
 		dwc3_otg_host_init(dwc);
 		dwc->otg_restart_host = 0;
 	}
 
-	spin_unlock(&dwc->lock);
+	spin_unlock_irqrestore(&dwc->lock, flags);
 
 	dwc3_set_mode(dwc, DWC3_GCTL_PRTCAP_OTG);
 
@@ -79,9 +80,11 @@ static irqreturn_t dwc3_otg_irq(int irq, void *_dwc)
 			return IRQ_NONE;
 		}
 
+		spin_lock(&dwc->lock);
 		if (dwc->current_otg_role == DWC3_OTG_ROLE_HOST &&
 		    !(reg & DWC3_OEVT_DEVICEMODE))
 			dwc->otg_restart_host = 1;
+		spin_unlock(&dwc->lock);
 		dwc3_writel(dwc->regs, DWC3_OEVT, reg);
 		ret = IRQ_WAKE_THREAD;
 	}

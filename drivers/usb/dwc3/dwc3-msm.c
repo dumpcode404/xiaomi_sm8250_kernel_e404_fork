@@ -459,7 +459,7 @@ static inline void dwc3_msm_write_reg_field(void __iomem *base, u32 offset,
 	u32 tmp = ioread32(base + offset);
 
 	tmp &= ~mask;		/* clear written bits */
-	val = tmp | (val << shift);
+	val = tmp | ((val << shift) & mask);
 	iowrite32(val, base + offset);
 
 	/* Read back to make sure that previous write goes through */
@@ -778,14 +778,22 @@ static int __dwc3_msm_ep_queue(struct dwc3_ep *dep, struct dwc3_request *req)
 static int dwc3_msm_ep_queue(struct usb_ep *ep,
 			     struct usb_request *request, gfp_t gfp_flags)
 {
-	struct dwc3_request *req = to_dwc3_request(request);
-	struct dwc3_ep *dep = to_dwc3_ep(ep);
-	struct dwc3 *dwc = dep->dwc;
-	struct dwc3_msm *mdwc = dev_get_drvdata(dwc->dev->parent);
+	struct dwc3_request *req;
+	struct dwc3_ep *dep;
+	struct dwc3 *dwc;
+	struct dwc3_msm *mdwc;
 	struct dwc3_msm_req_complete *req_complete;
 	unsigned long flags;
 	int ret = 0, size;
 	bool superspeed;
+
+	if (!ep || !request)
+		return -EINVAL;
+
+	req = to_dwc3_request(request);
+	dep = to_dwc3_ep(ep);
+	dwc = dep->dwc;
+	mdwc = dev_get_drvdata(dwc->dev->parent);
 
 	/*
 	 * We must obtain the lock of the dwc3 core driver,
@@ -813,12 +821,6 @@ static int dwc3_msm_ep_queue(struct usb_ep *ep,
 		dev_err(mdwc->dev,
 			"ep [%s,%d] was unconfigured as msm endpoint\n",
 			ep->name, dep->number);
-		spin_unlock_irqrestore(&dwc->lock, flags);
-		return -EINVAL;
-	}
-
-	if (!request) {
-		dev_err(mdwc->dev, "%s: request is NULL\n", __func__);
 		spin_unlock_irqrestore(&dwc->lock, flags);
 		return -EINVAL;
 	}
@@ -896,6 +898,8 @@ static int dwc3_msm_ep_queue(struct usb_ep *ep,
 
 err:
 	spin_unlock_irqrestore(&dwc->lock, flags);
+	list_del(&req_complete->list_item);
+	request->complete = req_complete->orig_complete;
 	kfree(req_complete);
 	return ret;
 }
@@ -3909,14 +3913,17 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		of_get_property(node, "qcom,gsi-reg-offset", &size);
 		if (size) {
 			mdwc->gsi_reg = devm_kzalloc(dev, size, GFP_KERNEL);
-			if (!mdwc->gsi_reg)
-				return -ENOMEM;
+			if (!mdwc->gsi_reg) {
+				ret = -ENOMEM;
+				goto err;
+			}
 
 			mdwc->gsi_reg_offset_cnt =
 					(size / sizeof(*mdwc->gsi_reg));
 			if (mdwc->gsi_reg_offset_cnt != GSI_REG_MAX) {
 				dev_err(dev, "invalid reg offset count\n");
-				return -EINVAL;
+				ret = -EINVAL;
+				goto err;
 			}
 
 			of_property_read_u32_array(dev->of_node,
@@ -3924,7 +3931,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 				mdwc->gsi_reg_offset_cnt);
 		} else {
 			dev_err(dev, "err provide qcom,gsi-reg-offset\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err;
 		}
 	}
 
@@ -4180,6 +4188,8 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&mdwc->perf_vote_work);
 	msm_dwc3_perf_vote_update(mdwc, false);
 	cancel_delayed_work_sync(&mdwc->sm_work);
+	cancel_work_sync(&mdwc->restart_usb_work);
+	cancel_work_sync(&mdwc->vbus_draw_work);
 
 	if (mdwc->hs_phy)
 		mdwc->hs_phy->flags &= ~PHY_HOST_MODE;
@@ -4390,6 +4400,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 			pm_runtime_put_sync(mdwc->dev);
 			dbg_event(0xFF, "pdeverr psync",
 				atomic_read(&mdwc->dev->power.usage_count));
+			usb_unregister_atomic_notify(&mdwc->usbdev_nb);
 			usb_unregister_notify(&mdwc->host_nb);
 			return ret;
 		}

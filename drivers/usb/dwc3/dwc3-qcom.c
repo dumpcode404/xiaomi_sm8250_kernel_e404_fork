@@ -402,8 +402,10 @@ static int dwc3_qcom_clk_init(struct dwc3_qcom *qcom, int count)
 
 		clk = of_clk_get(np, i);
 		if (IS_ERR(clk)) {
-			while (--i >= 0)
+			while (--i >= 0) {
+				clk_disable_unprepare(qcom->clks[i]);
 				clk_put(qcom->clks[i]);
+			}
 			return PTR_ERR(clk);
 		}
 
@@ -471,8 +473,8 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	qcom->qscratch_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(qcom->qscratch_base)) {
-		dev_err(dev, "failed to map qscratch, err=%d\n", ret);
 		ret = PTR_ERR(qcom->qscratch_base);
+		dev_err(dev, "failed to map qscratch, err=%d\n", ret);
 		goto clk_disable;
 	}
 
@@ -503,6 +505,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 	}
 
 	qcom->dwc3 = of_find_device_by_node(dwc3_np);
+	of_node_put(dwc3_np);
 	if (!qcom->dwc3) {
 		dev_err(&pdev->dev, "failed to get dwc3 platform device\n");
 		ret = -ENODEV;
@@ -548,6 +551,9 @@ static int dwc3_qcom_remove(struct platform_device *pdev)
 	int i;
 
 	of_platform_depopulate(dev);
+
+	if (qcom->dwc3)
+		put_device(&qcom->dwc3->dev);
 
 	for (i = qcom->num_clocks - 1; i >= 0; i--) {
 		clk_disable_unprepare(qcom->clks[i]);

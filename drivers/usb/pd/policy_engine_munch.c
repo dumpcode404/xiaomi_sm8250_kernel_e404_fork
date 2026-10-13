@@ -169,13 +169,6 @@ static const char * const usbpd_ext_msg_strings[] = {
 	"Country_Codes",
 };
 
-#undef dev_dbg
-#define dev_dbg dev_err
-#undef pr_debug
-#define pr_debug pr_err
-#undef pr_info
-#define pr_info pr_err
-
 static inline const char *msg_to_string(u8 id, bool is_data, bool is_ext)
 {
 	if (is_ext) {
@@ -1059,13 +1052,7 @@ static int pd_eval_src_caps(struct usbpd *pd)
 		start_usb_peripheral(pd);
 
 	/* Select the first PDO (vSafe5V) immediately. */
-	/* Select thr first PDO for zimi adapter*/
-	//if (pd->batt_2s && pd->adapter_id == 0xA819)
-		//pd_select_pdo(pd, 2, 0, 0);
-//	else if (pd->request_reject == 1)
-	//	;
-	//else
-		pd_select_pdo(pd, 1, 0, 0);
+	pd_select_pdo(pd, 1, 0, 0);
 
 	return 0;
 }
@@ -1323,13 +1310,6 @@ static void phy_msg_received(struct usbpd *pd, enum pd_sop_type sop,
 	/* if spec rev differs (i.e. is older), update PHY */
 	if (PD_MSG_HDR_REV(header) < pd->spec_rev)
 		pd->spec_rev = PD_MSG_HDR_REV(header);
-
-	/*msg_type = PD_MSG_HDR_TYPE(header);
-	num_objs = PD_MSG_HDR_COUNT(header);
-	usbpd_dbg(&pd->dev, "%s type(%d) num_objs(%d)\n",
-			msg_to_string(msg_type, num_objs,
-				PD_MSG_HDR_IS_EXTENDED(header)),
-			msg_type, num_objs);*/
 
 	if (!PD_MSG_HDR_IS_EXTENDED(header)) {
 		rx_msg = kzalloc(sizeof(*rx_msg) + len, GFP_ATOMIC);
@@ -1880,8 +1860,12 @@ static void handle_vdm_tx(struct usbpd *pd, enum pd_sop_type sop_type)
 
 		mutex_unlock(&pd->svid_handler_lock);
 		/* retry when hitting PE_SRC/SNK_Ready again */
-		if (ret != -EBUSY && sop_type == SOP_MSG)
+		if (ret != -EBUSY && sop_type == SOP_MSG) {
 			usbpd_set_state(pd, PE_SEND_SOFT_RESET);
+		} else if (sop_type != SOP_MSG) {
+			kfree(pd->vdm_tx);
+			pd->vdm_tx = NULL;
+		}
 
 		return;
 	}
@@ -3852,8 +3836,8 @@ static void usbpd_sm(struct work_struct *w)
 			state_handlers[pd->current_state].handle_state)
 		state_handlers[pd->current_state].handle_state(pd, rx_msg);
 	else
-		usbpd_err(&pd->dev, "Unhandled state %s\n",
-				usbpd_state_strings[pd->current_state]);
+		usbpd_err(&pd->dev, "Unhandled state %d\n",
+				pd->current_state);
 sm_done:
 	kfree(rx_msg);
 
@@ -5374,12 +5358,6 @@ int usbpd_select_pdo(struct usbpd *pd, int pdo, int uv, int ua)
 		ret = -EINVAL;
 	}
 
-	//if (pd->request_reject == 1) {
-	//	usbpd_err(&pd->dev, "set request rejected as 0\n");
-	//	pd->request_reject = 0;
-	//	ret = -EINVAL;
-	//}
-
 out:
 	pd->send_request = false;
 	pd->last_pdo = pdo;
@@ -5591,16 +5569,15 @@ static void usbpd_pdo_workfunc(struct work_struct *w)
 				(PD_SRC_PDO_TYPE(pdo) == PD_SRC_PDO_TYPE_AUGMENTED) ? "PPS" : "PD2.0",
 				max_volt, min_volt, max_curr);
 	}
-	//usbpd_err(&pd->dev, "huangrui add pps_max_watts[%d],pd->apdo_max:%d\n", pps_max_watts / 1000  / 1000,pd->apdo_max);
 	if (pd->verifed) {
 		pps_max_mwatt = pps_max_watts / 1000  / 1000;
-		//if (pps_max_mwatt != pd->apdo_max) {
-		pd->apdo_max = pps_max_mwatt;
-		val.intval = pps_max_mwatt;
-		power_supply_set_property(pd->usb_psy,
-				POWER_SUPPLY_PROP_APDO_MAX, &val);
-		usbpd_err(&pd->dev, "pps_max_watts[%d]\n", pps_max_mwatt);
-		//}
+		if (pps_max_mwatt != pd->apdo_max) {
+			pd->apdo_max = pps_max_mwatt;
+			val.intval = pps_max_mwatt;
+			power_supply_set_property(pd->usb_psy,
+					POWER_SUPPLY_PROP_APDO_MAX, &val);
+			usbpd_dbg(&pd->dev, "pps_max_watts[%d]\n", pps_max_mwatt);
+		}
 	}
 
 	if (pd->batt_2s) {
