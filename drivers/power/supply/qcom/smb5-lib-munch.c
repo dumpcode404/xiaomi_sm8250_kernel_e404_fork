@@ -1875,7 +1875,6 @@ int smblib_set_icl_current(struct smb_charger *chg, int icl_ua)
 	union power_supply_propval pval = {0,};
 	int dc_power_on = 0;
 	enum icl_override_mode icl_override = HW_AUTO_MODE;
-	static int pre_icl;
 
 	/* suspend if 25mA or less is requested */
 	bool suspend = (icl_ua <= USBIN_25MA);
@@ -1889,12 +1888,12 @@ int smblib_set_icl_current(struct smb_charger *chg, int icl_ua)
 			    POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
 		return 0;
 
-	if (pre_icl == 0 && icl_ua >= 1500000) {
+	if (chg->pre_icl == 0 && icl_ua >= 1500000) {
 		chg->cp_to_sw_status = true;
 		schedule_delayed_work(&chg->clean_cp_to_sw_work,
 				msecs_to_jiffies(CLEAN_CP_TO_SW_DELAY_MS));
 	}
-	pre_icl = icl_ua;
+	chg->pre_icl = icl_ua;
 
 	/*pr_err("set_icl_current_icl_ua : %d\n", icl_ua);*/
 

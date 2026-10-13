@@ -599,7 +599,7 @@ static int smb5_charge_gpio_init(struct smb_charger *chg, struct device_node *no
 	chg->smb5_pinctrl = devm_pinctrl_get(chg->dev);
 	if (IS_ERR_OR_NULL(chg->smb5_pinctrl)) {
 		dev_err(chg->dev, "No pinctrl config specified\n");
-		rc = PTR_ERR(chg->dev);
+		rc = PTR_ERR(chg->smb5_pinctrl);
 		return rc;
 	}
 	chg->smb5_gpio_active =
@@ -647,8 +647,6 @@ static int smb5_charge_gpio_init(struct smb_charger *chg, struct device_node *no
 	return rc;
 }
 
-#define MICRO_1P5A			1500000
-#define MICRO_P1A			100000
 #define MICRO_1PA			1000000
 #define MICRO_3PA			3000000
 #define MICRO_4PA			4000000
