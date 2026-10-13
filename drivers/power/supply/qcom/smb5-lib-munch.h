@@ -111,7 +111,6 @@ enum print_reason {
 #define MAX_TEMP_LEVEL		16
 /* defined for distinguish qc class_a and class_b */
 #define VOL_THR_FOR_QC_CLASS_AB		12400000
-#define VOL_THR_FOR_QC_CLASS_AB_PSYCHE	12300000
 #define VOL_THR_FOR_QC_CLASS_AB_MUNCH	12300000
 #define COMP_FOR_LOW_RESISTANCE_CABLE	100000
 #define QC_CLASS_A_CURRENT_UA		3600000
@@ -862,6 +861,7 @@ struct smb_charger {
 	bool			vbus_rising;
 	bool			fake_plug_out;
 	bool			cp_to_sw_status;
+	int			pre_icl;
 
 	/* extcon for VBUS / ID notification to USB for uUSB */
 	struct extcon_dev	*extcon;
@@ -1226,24 +1226,13 @@ int smblib_set_prop_bt_state(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_set_prop_input_current_max(struct smb_charger *chg,
 					const union power_supply_propval *val);
-int smblib_get_prop_wireless_version(struct smb_charger *chg,
-				     union power_supply_propval *val);
 int smblib_set_prop_dc_temp_level(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_get_prop_dc_temp_level(struct smb_charger *chg,
 				union power_supply_propval *val);
-int smblib_set_prop_tx_mac(struct smb_charger *chg,
-				const union power_supply_propval *val);
 void smblib_set_prop_pen_mac(struct smb_charger *chg,
 				const union power_supply_propval *val);
-int smblib_set_prop_rx_cr(struct smb_charger *chg,
-				const union power_supply_propval *val);
 int smblib_set_prop_rx_cep(struct smb_charger *chg,
-				const union power_supply_propval *val);
-int smblib_set_prop_bt_state(struct smb_charger *chg,
-				const union power_supply_propval *val);
-
-int smblib_set_sw_disable_dc_en(struct smb_charger *chg,
 				const union power_supply_propval *val);
 
 int smblib_set_prop_typec_boost_otg_disable(struct smb_charger *chg,

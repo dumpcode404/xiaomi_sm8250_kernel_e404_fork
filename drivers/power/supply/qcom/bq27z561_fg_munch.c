@@ -397,7 +397,7 @@ static int __fg_read_block(struct i2c_client *client, u8 reg, u8 *buf, u8 len)
 
 	//ret = i2c_smbus_read_i2c_block_data(client, reg, len, buf);
 
-	return ret;
+	return 0;
 }
 
 static int __fg_write_block(struct i2c_client *client, u8 reg, u8 *buf, u8 len)
@@ -413,7 +413,7 @@ static int __fg_write_block(struct i2c_client *client, u8 reg, u8 *buf, u8 len)
 		}
 	}
 
-	return ret;
+	return 0;
 }
 
 /*
@@ -990,7 +990,7 @@ static int fg_read_system_soc(struct bq_fg_chip *bq)
 				&& (status == POWER_SUPPLY_STATUS_CHARGING)) {
 			unit_time = 40000;
 			calc_delta_time(last_change_time, &change_delta);
-			if (delta_time < 0) {
+			if (change_delta < 0) {
 				last_change_time = ktime_get();
 				delta_time = 0;
 			}
@@ -1268,7 +1268,7 @@ static int fg_read_tte(struct bq_fg_chip *bq)
 		return ret;
 	}
 
-	if (ret == 0xFFFF)
+	if (tte == 0xFFFF)
 		return -ENODATA;
 
 	return tte;
@@ -1291,7 +1291,7 @@ static int fg_read_ttf(struct bq_fg_chip *bq)
                 return ret;
         }
 
-        if (ret == 0xFFFF)
+        if (ttf == 0xFFFF)
                 return -ENODATA;
 
         return ttf;
@@ -1314,7 +1314,7 @@ static int fg_read_charging_current(struct bq_fg_chip *bq)
 		return ret;
 	}
 
-	if (ret == 0xFFFF)
+	if (cc == 0xFFFF)
 		return -ENODATA;
 
 	return cc;
@@ -1337,7 +1337,7 @@ static int fg_read_charging_voltage(struct bq_fg_chip *bq)
 		return ret;
 	}
 
-	if (ret == 0xFFFF)
+	if (cv == 0xFFFF)
 		return -ENODATA;
 
 	return cv;
@@ -1388,7 +1388,9 @@ static int fg_get_soc_decimal_rate(struct bq_fg_chip *bq)
 
 	for (i = 0; i < bq->dec_rate_len; i += 2) {
 		if (soc < bq->dec_rate_seq[i]) {
-			return bq->dec_rate_seq[i - 1];
+			/* i==0 has no previous bucket; use the first rate */
+			return (i == 0) ? bq->dec_rate_seq[1] :
+						bq->dec_rate_seq[i - 1];
 		}
 	}
 
@@ -2488,6 +2490,9 @@ static int fg_get_raw_soc(struct bq_fg_chip *bq)
 
 	rm = fg_read_rm(bq);
 	fcc = fg_read_fcc(bq);
+
+	if (fcc == 0)
+		return 0;
 
 	//raw_soc = DIV_ROUND_CLOSEST(rm * 10000 / fcc, 100);
 	raw_soc = rm * 10000 / fcc;

@@ -591,13 +591,10 @@ static void taper_fcc_step_chg(struct step_chg_info *chip, int index,
 	int current_fcc, target_fcc,last_index_fcc;
 	int current_debug;
 	union power_supply_propval pval = {0, };
-	int pps_max_watts = 0;
 	if (index < 0) {
 		pr_err("Invalid STEP CHG index\n");
 		return;
 	}
-	power_supply_get_property(chip->usb_psy, POWER_SUPPLY_PROP_APDO_MAX, &pval);
-	pps_max_watts = pval.intval;
 	power_supply_get_property(chip->bms_psy, POWER_SUPPLY_PROP_CAPACITY, &pval);
 	current_fcc = get_effective_result(chip->fcc_votable);
 	target_fcc = chip->step_chg_config->fcc_cfg[index].value;
@@ -770,7 +767,7 @@ static int handle_fast_charge(struct step_chg_info *chip, int temp)
 {
 	union power_supply_propval pval = {0, };
 	static bool fast_mode_dis;
-	int rc, dc_present, is_cp_en;
+	int rc, dc_present = 0, is_cp_en = 0;
 	int pd_authen;
 
 	if (is_dc_wls_available(chip)) {
