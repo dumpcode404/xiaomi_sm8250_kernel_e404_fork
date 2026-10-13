@@ -93,7 +93,11 @@ static int fts_spi_transfer(u8 *tx_buf, u8 *rx_buf, u32 len)
 
 	ret = spi_sync(spi, &msg);
 	if (ret) {
-		FTS_ERROR("spi_sync fail,ret:%d", ret);
+		/* Suppressed during an ongoing IRQ comerr storm (counted and
+		 * reported once by fts_irq_read_report); one-off failures
+		 * still print since comerr_cnt is 0 outside a storm. */
+		if (!fts_data || fts_data->comerr_cnt == 0)
+			FTS_ERROR("spi_sync fail,ret:%d", ret);
 		return ret;
 	}
 

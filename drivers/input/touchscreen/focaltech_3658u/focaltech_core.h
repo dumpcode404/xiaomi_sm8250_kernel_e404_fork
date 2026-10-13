@@ -189,6 +189,8 @@ struct fts_ts_data {
 	struct mutex bus_lock;
 	int irq;
 	int log_level;
+	u32 comerr_cnt;     /* consecutive touch-data failures (IRQ ctx) */
+	u32 comerr_cool;    /* cooldown IRQs between TP recovery attempts */
 	int fw_is_running;      /* confirm fw is running when using spi:default 0 */
 	int dummy_byte;
 #if defined(CONFIG_PM) && FTS_PATCH_COMERR_PM

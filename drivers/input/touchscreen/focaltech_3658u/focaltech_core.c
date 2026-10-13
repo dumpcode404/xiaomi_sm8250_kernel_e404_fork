@@ -595,7 +595,10 @@ static int fts_read_touchdata(struct fts_ts_data *data)
 
 	ret = fts_read(buf, 1, buf + 1, data->pnt_buf_size - 1);
 	if (ret < 0) {
-		FTS_ERROR("touch data(%x) abnormal,ret:%d", buf[1], ret);
+		/* Gated: the flood guard in fts_irq_read_report() counts
+		 * consecutive failures; don't print every IRQ or logd melts. */
+		if (data->comerr_cnt == 0)
+			FTS_ERROR("touch data(%x) abnormal,ret:%d", buf[1], ret);
 		return -EIO;
 	}
 
@@ -656,7 +659,8 @@ static int fts_read_parse_touchdata(struct fts_ts_data *data)
 		if (pointid >= FTS_MAX_ID)
 			break;
 		else if (pointid >= max_touch_num) {
-			FTS_ERROR("ID(%d) beyond max_touch_number", pointid);
+			if (data->comerr_cnt == 0)
+				FTS_ERROR("ID(%d) beyond max_touch_number", pointid);
 			return -EINVAL;
 		}
 
@@ -689,6 +693,17 @@ static int fts_read_parse_touchdata(struct fts_ts_data *data)
 	return 0;
 }
 
+/*
+ * Consecutive touch-data failures mean the bus/IC is wedged. The old code
+ * printed FTS_ERROR on every IRQ with no recovery path (ESD check is off),
+ * so a transient glitch turned into a permanent kmsg flood: logd burns CPU,
+ * thermals pin the CPU at max, and only a reboot clears it. Count failures
+ * instead, attempt a one-shot TP recovery, then stay quiet with a cooldown
+ * between attempts. Threaded-IRQ context, sleeping is allowed.
+ */
+#define FTS_COMERR_THRESHOLD	50
+#define FTS_COMERR_COOLDOWN	500
+
 static void fts_irq_read_report(void)
 {
 	int ret = 0;
@@ -704,6 +719,8 @@ static void fts_irq_read_report(void)
 
 	ret = fts_read_parse_touchdata(ts_data);
 	if (ret == 0) {
+		ts_data->comerr_cnt = 0;
+		ts_data->comerr_cool = 0;
 		mutex_lock(&ts_data->report_mutex);
 #if FTS_MT_PROTOCOL_B_EN
 		fts_input_report_b(ts_data);
@@ -711,6 +728,17 @@ static void fts_irq_read_report(void)
 		fts_input_report_a(ts_data);
 #endif
 		mutex_unlock(&ts_data->report_mutex);
+	} else if (++ts_data->comerr_cnt == FTS_COMERR_THRESHOLD) {
+		FTS_ERROR("touch data abnormal %u times in a row, try TP recovery",
+			  ts_data->comerr_cnt);
+		fts_release_all_finger();
+		fts_reset_proc(200);
+		fts_tp_state_recovery(ts_data);
+	} else if (ts_data->comerr_cnt > FTS_COMERR_THRESHOLD) {
+		if (++ts_data->comerr_cool >= FTS_COMERR_COOLDOWN) {
+			ts_data->comerr_cnt = 0;
+			ts_data->comerr_cool = 0;
+		}
 	}
 
 #if FTS_ESDCHECK_EN
