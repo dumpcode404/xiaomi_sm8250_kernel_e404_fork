@@ -71,6 +71,7 @@ static irqreturn_t dwc3_otg_irq(int irq, void *_dwc)
 	u32 reg;
 	struct dwc3 *dwc = _dwc;
 	irqreturn_t ret = IRQ_NONE;
+	unsigned long flags;
 
 	reg = dwc3_readl(dwc->regs, DWC3_OEVT);
 	if (reg) {
@@ -80,11 +81,11 @@ static irqreturn_t dwc3_otg_irq(int irq, void *_dwc)
 			return IRQ_NONE;
 		}
 
-		spin_lock(&dwc->lock);
+		spin_lock_irqsave(&dwc->lock, flags);
 		if (dwc->current_otg_role == DWC3_OTG_ROLE_HOST &&
 		    !(reg & DWC3_OEVT_DEVICEMODE))
 			dwc->otg_restart_host = 1;
-		spin_unlock(&dwc->lock);
+		spin_unlock_irqrestore(&dwc->lock, flags);
 		dwc3_writel(dwc->regs, DWC3_OEVT, reg);
 		ret = IRQ_WAKE_THREAD;
 	}
