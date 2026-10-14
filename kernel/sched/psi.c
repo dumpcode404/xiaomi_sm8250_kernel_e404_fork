@@ -1269,7 +1269,7 @@ static long psi_fop_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 {
 	struct seq_file *seq = file->private_data;
 	struct psi_trigger *t;
-	unsigned int ret;
+	long ret;
 	void __user *ubuf = (void __user *)arg;
 
 	if (static_branch_likely(&psi_disabled))
@@ -1279,7 +1279,7 @@ static long psi_fop_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 	case GET_LAST_PSI_EVENT_INFO: {
 		struct psi_event_info last_event_info;
 		rcu_read_lock();
-		t = rcu_dereference(seq->private);
+		t = rcu_dereference(*(void __rcu __force **)&seq->private);
 		if (t) {
 			last_event_info.last_event_time = t->last_event_time;
 			last_event_info.last_event_growth = t->last_event_growth;
