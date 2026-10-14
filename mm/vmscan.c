@@ -4557,6 +4557,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	int type;
 	int scanned;
 	int reclaimed;
+	int nr_isolated = 0;
 	LIST_HEAD(list);
 	LIST_HEAD(clean);
 	struct page *page;
@@ -4581,6 +4582,12 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 
 	if (list_empty(&list))
 		return scanned;
+
+	/* track isolated pages for too_many_isolated() */
+	list_for_each_entry(page, &list, lru)
+		nr_isolated += hpage_nr_pages(page);
+	if (nr_isolated)
+		mod_node_page_state(pgdat, NR_ISOLATED_ANON + type, nr_isolated);
 retry:
 	reclaimed = shrink_page_list(&list, pgdat, sc, 0, NULL, false);
 	sc->nr_reclaimed += reclaimed;
@@ -4639,6 +4646,8 @@ retry:
 
 	if (swapped && type == LRU_GEN_ANON)
 		*swapped = true;
+
+	mod_node_page_state(pgdat, NR_ISOLATED_ANON + type, -nr_isolated);
 
 	return scanned;
 }
