@@ -76,6 +76,12 @@ jobs:
 
           echo "PATH=$PATH" >> $GITHUB_ENV
 
+      - name: Setup KernelSU (ReSukiSU + SuSFS)
+        if: github.event.inputs.kernel_branch == 'test-ksu-susfs'
+        working-directory: kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+
       - name: Build Kernel
         working-directory: kernel
         run: |
