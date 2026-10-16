@@ -80,7 +80,8 @@ jobs:
         if: github.event.inputs.kernel_branch == 'test-ksu-susfs'
         working-directory: kernel
         run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          # Pin BakaSU to v4.2.0-rc3: main tip hard-blocks SuSFS builds
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s v4.2.0-rc3
 
       - name: Build Kernel
         working-directory: kernel
