@@ -8263,6 +8263,17 @@ static void uclamp_set(struct cgroup_subsys_state *css)
 {
 	int i;
 
+	/*
+	 * cpu_quota_us is a hard cap for the whole group per 100ms period,
+	 * aggregated over all CPUs: 100000us == one full CPU, so e.g.
+	 * 400000us allows four CPUs' worth of runtime in total.
+	 *
+	 * Keep these deliberately loose.  They are guard rails against a
+	 * runaway group, not throttles for normal work: a cap that is hit
+	 * regularly would freeze everything in the group until the next
+	 * period (up to 100ms), which is exactly the jitter we want to
+	 * avoid.  < 0 leaves the group unlimited.
+	 */
 	static struct uclamp_param tgts[] = {
 		{"top-app",             "20", "max", 1, 20480,	-1},
 		{"rt",			"0", "max", 0, 20480,	-1},
@@ -8270,9 +8281,9 @@ static void uclamp_set(struct cgroup_subsys_state *css)
 		{"foreground",          "0",  "80",  0, 12288,	-1},
 		{"camera-daemon",       "0", "max", 0, 20480,	-1},
 		{"system",              "0", "max", 0, 20480,	-1},
-		{"dex2oat",             "0",  "20",  0, 	 512,	20000},
-		{"background",          "0", "30",  0,  1024,	200000},
-		{"system-background",   "0", "50",  0, 10240,	300000},
+		{"dex2oat",             "0",  "20",  0, 	 512,	100000},
+		{"background",          "0", "30",  0,  1024,	400000},
+		{"system-background",   "0", "50",  0, 10240,	400000},
 	};
 
         if(!css->cgroup->kn)
