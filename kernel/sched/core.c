@@ -8247,6 +8247,7 @@ struct uclamp_param {
 	char uclamp_max[3];
 	u64  uclamp_latency_sensitive;
 	u64  cpu_shares;
+	s64  cpu_quota_us;	/* <0 = unlimited */
 };
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -8254,20 +8255,24 @@ static int cpu_shares_write_u64(struct cgroup_subsys_state *css,
 				struct cftype *cftype, u64 shareval);
 #endif
 
+#ifdef CONFIG_CFS_BANDWIDTH
+static int tg_set_cfs_bandwidth(struct task_group *tg, u64 period, u64 quota);
+#endif
+
 static void uclamp_set(struct cgroup_subsys_state *css)
 {
 	int i;
 
 	static struct uclamp_param tgts[] = {
-		{"top-app",             "20", "max", 1, 20480},
-		{"rt",			"0", "max", 0, 20480},
-		{"nnapi-hal",		"0", "max", 0, 20480},
-		{"foreground",          "0",  "80",  0, 12288},
-		{"camera-daemon",       "0", "max", 0, 20480},
-		{"system",              "0", "max", 0, 20480},
-		{"dex2oat",             "0",  "20",  0, 	 512},
-		{"background",          "0", "30",  0,  1024},
-		{"system-background",   "0", "50",  0, 10240},
+		{"top-app",             "20", "max", 1, 20480,	-1},
+		{"rt",			"0", "max", 0, 20480,	-1},
+		{"nnapi-hal",		"0", "max", 0, 20480,	-1},
+		{"foreground",          "0",  "80",  0, 12288,	-1},
+		{"camera-daemon",       "0", "max", 0, 20480,	-1},
+		{"system",              "0", "max", 0, 20480,	-1},
+		{"dex2oat",             "0",  "20",  0, 	 512,	20000},
+		{"background",          "0", "30",  0,  1024,	200000},
+		{"system-background",   "0", "50",  0, 10240,	300000},
 	};
 
         if(!css->cgroup->kn)
@@ -8288,10 +8293,23 @@ static void uclamp_set(struct cgroup_subsys_state *css)
 			cpu_shares_write_u64(css, NULL, tgt.cpu_shares);
 #endif
 
+#ifdef CONFIG_CFS_BANDWIDTH
+			/*
+			 * Hard cap only the groups we deliberately want to
+			 * throttle; cpu_quota_us < 0 leaves the group
+			 * unlimited.  Requires CONFIG_CFS_BANDWIDTH, which is
+			 * also what makes tg_set_cfs_bandwidth() exist.
+			 */
+			if (tgt.cpu_quota_us >= 0)
+				tg_set_cfs_bandwidth(css_tg(css),
+						     100ULL * NSEC_PER_MSEC,
+						     (u64)tgt.cpu_quota_us * NSEC_PER_USEC);
+#endif
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 			pr_info("uclamp_assist: setting values for %s: uclamp_min=%s uclamp_max=%s"
-				"uclamp_latency_sensitive=%d cpu_shares=%d\n",
-				tgt.name, tgt.uclamp_min, tgt.uclamp_max, tgt.uclamp_latency_sensitive, tgt.cpu_shares);
+				"uclamp_latency_sensitive=%d cpu_shares=%d cpu_quota_us=%lld\n",
+				tgt.name, tgt.uclamp_min, tgt.uclamp_max, tgt.uclamp_latency_sensitive, tgt.cpu_shares, (long long)tgt.cpu_quota_us);
 #else
                         pr_info("uclamp_assist: setting values for %s: uclamp_min=%s uclamp_max=%s uclamp_latency_sensitive=%d\n",
                                 tgt.name, tgt.uclamp_min, tgt.uclamp_max, tgt.uclamp_latency_sensitive);
