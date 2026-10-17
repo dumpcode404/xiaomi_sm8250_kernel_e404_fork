@@ -2271,6 +2271,16 @@ void dev_net_set(struct net_device *dev, struct net *net)
 	write_pnet(&dev->nd_net, net);
 }
 
+static inline
+struct net *dev_net_rcu(const struct net_device *dev)
+{
+#ifdef CONFIG_NET_NS
+	return rcu_dereference(dev->nd_net.net);
+#else
+	return read_pnet(&dev->nd_net);
+#endif
+}
+
 /**
  *	netdev_priv - access network device private data
  *	@dev: network device
