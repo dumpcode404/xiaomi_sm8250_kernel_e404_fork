@@ -2676,6 +2676,7 @@ static inline void cpufreq_update_util(struct rq *rq, unsigned int flags) {}
 
 #ifdef CONFIG_UCLAMP_TASK
 unsigned long uclamp_eff_value(struct task_struct *p, enum uclamp_id clamp_id);
+void init_uclamp_rq(struct rq *rq);
 
 static inline unsigned long uclamp_rq_get(struct rq *rq,
 					  enum uclamp_id clamp_id)
@@ -2768,6 +2769,8 @@ static inline unsigned long uclamp_eff_value(struct task_struct *p,
 
 	return SCHED_CAPACITY_SCALE;
 }
+
+static inline void init_uclamp_rq(struct rq *rq) {}
 
 static inline
 unsigned long uclamp_rq_util_with(struct rq *rq, unsigned long util,
