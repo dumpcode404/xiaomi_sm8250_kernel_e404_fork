@@ -525,8 +525,11 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 			err = split_vma(mm, vma, old_addr, 1);
 		if (!err && vma->vm_end != old_addr + old_len)
 			err = split_vma(mm, vma, old_addr + old_len, 0);
-		if (err)
+		if (err) {
+			if (vm_flags & VM_ACCOUNT)
+				vm_unacct_memory(to_account >> PAGE_SHIFT);
 			return err;
+		}
 	}
 
 	new_pgoff = vma->vm_pgoff + ((old_addr - vma->vm_start) >> PAGE_SHIFT);
