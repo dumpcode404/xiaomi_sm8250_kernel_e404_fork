@@ -2842,13 +2842,17 @@ static void snd_usb_mixer_free(struct usb_mixer_interface *mixer)
 
 	/* Unregister controls first, snd_ctl_remove() frees the element */
 	if (mixer->id_elems) {
+		struct snd_card *card = mixer->chip->card;
+
+		down_write(&card->controls_rwsem);
 		for (id = 0; id < MAX_ID_ELEMS; id++) {
 			for (list = mixer->id_elems[id]; list; list = next) {
 				next = list->next_id_elem;
 				if (list->kctl)
-					snd_ctl_remove(mixer->chip->card, list->kctl);
+					snd_ctl_remove(card, list->kctl);
 			}
 		}
+		up_write(&card->controls_rwsem);
 		kfree(mixer->id_elems);
 	}
 	if (mixer->urb) {
