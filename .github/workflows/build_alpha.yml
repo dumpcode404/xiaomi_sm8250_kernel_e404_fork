@@ -108,6 +108,41 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
+      - name: Verify Debug Artifacts
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+
+          test -s out/vmlinux
+          test -s out/System.map
+          test -s out/.config
+          test -s out/arch/arm64/boot/Image
+
+          grep -q '^CONFIG_KALLSYMS=y$'                 out/.config
+          grep -q '^CONFIG_KALLSYMS_ALL=y$'             out/.config
+          grep -q '^CONFIG_KALLSYMS_BASE_RELATIVE=y$'   out/.config
+          grep -q '^CONFIG_DEBUG_KERNEL=y$'             out/.config
+          grep -q '^CONFIG_DEBUG_INFO=y$'               out/.config
+          grep -q '^CONFIG_FRAME_POINTER=y$'            out/.config
+          grep -q '^CONFIG_ARCH_WANT_FRAME_POINTERS=y$' out/.config
+          grep -q '^CONFIG_RANDOMIZE_BASE=y$'           out/.config
+          ! grep -q '^CONFIG_DEBUG_INFO_REDUCED=y$'     out/.config
+          ! grep -q '^CONFIG_DEBUG_INFO_SPLIT=y$'       out/.config
+
+          # Dump tool output to files first: "producer | grep -q" would trip
+          # pipefail through SIGPIPE as soon as grep exits on the first match.
+          readelf -S out/vmlinux > "$RUNNER_TEMP/vmlinux.sections"
+          grep -q '\.debug_info' "$RUNNER_TEMP/vmlinux.sections"
+
+          nm out/vmlinux > "$RUNNER_TEMP/vmlinux.nm"
+          grep -q ' kallsyms_names$' "$RUNNER_TEMP/vmlinux.nm"
+
+          grep -q ' _stext$' out/System.map
+
+          echo "vmlinux, DWARF, kallsyms, System.map and config verified"
+          du -h out/vmlinux out/System.map out/arch/arm64/boot/Image
+          df -h .
+
       - name: Clone AnyKernel3
         run: |
           git clone --depth=1 \
@@ -145,4 +180,17 @@ jobs:
         with:
           name: E404-Kernel
           path: RE404-*.zip
+
+      - name: Upload Debug Symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: E404-Kernel-debug
+          path: |
+            kernel/out/vmlinux
+            kernel/out/System.map
+            kernel/out/.config
+            kernel/out/arch/arm64/boot/Image
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
           
