@@ -816,9 +816,14 @@ KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 KBUILD_CFLAGS += $(call cc-disable-warning, default-const-init-unsafe)
 
 ifdef CONFIG_LTO_CLANG
-KBUILD_LDFLAGS += -O3 --lto-O3 --plugin-opt=O3 --strip-debug
+KBUILD_LDFLAGS += -O3 --lto-O3 --plugin-opt=O3
 else
-KBUILD_LDFLAGS += -O3 --strip-debug
+KBUILD_LDFLAGS += -O3
+endif
+# Keep DWARF in vmlinux when CONFIG_DEBUG_INFO is enabled. The Image that is
+# flashed is produced by objcopy and does not contain debug sections.
+ifndef CONFIG_DEBUG_INFO
+KBUILD_LDFLAGS += --strip-debug
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
