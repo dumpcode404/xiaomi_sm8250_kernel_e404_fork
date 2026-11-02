@@ -6109,7 +6109,8 @@ static bool allow_direct_reclaim(pg_data_t *pgdat, bool using_kswapd)
 		if (!managed_zone(zone))
 			continue;
 
-		if (!zone_reclaimable_pages(zone))
+		if (!zone_reclaimable_pages(zone) &&
+		    zone_page_state_snapshot(zone, NR_FREE_PAGES))
 			continue;
 
 		pfmemalloc_reserve += min_wmark_pages(zone);
