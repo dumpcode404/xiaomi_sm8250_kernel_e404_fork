@@ -3038,13 +3038,5 @@ static inline bool early_detection_notify(struct rq *rq, u64 wallclock)
 
 static inline void note_task_waking(struct task_struct *p, u64 wallclock) { }
 
-struct sched_avg_stats {
-	int nr;
-	int nr_misfit;
-	int nr_max;
-	int nr_scaled;
-};
-extern void sched_get_nr_running_avg(struct sched_avg_stats *stats);
-
 extern u64 avg_vruntime(struct cfs_rq *cfs_rq);
 extern bool dequeue_task(struct rq *rq, struct task_struct *p, int flags);
