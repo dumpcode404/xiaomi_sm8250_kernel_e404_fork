@@ -246,7 +246,7 @@ bad_bmap:
 static bool swap_sched_async_compress(struct page *page)
 {
 	struct swap_info_struct *sis;
-	pg_data_t *pgdat = NODE_DATA(nid);
+	pg_data_t *pgdat = page_pgdat(page);
 	static atomic_t rr_cursor = ATOMIC_INIT(0);
 	unsigned int start_hid, i;
 	int hid;
