@@ -9097,7 +9097,7 @@ static bool yield_to_task_fair(struct rq *rq, struct task_struct *p, bool preemp
 	struct sched_entity *se = &p->se;
 
 	/* !se->on_rq also covers throttled task */
-	if (!se->on_rq)
+	if (!se->on_rq || se->sched_delayed)
 		return false;
 
 	/* Tell the scheduler that we'd really like pse to run next. */
