@@ -405,6 +405,7 @@ int generic_swapfile_activate(struct swap_info_struct *, struct file *,
 		sector_t *);
 
 int kcompressd(void *p);
+void kcompressd_drain_queue(struct pglist_data *pgdat, int hid);
 
 /* linux/mm/swap_state.c */
 /* One swap address space for each 64M swap space */

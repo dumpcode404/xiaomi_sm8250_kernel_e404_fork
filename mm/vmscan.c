@@ -7138,8 +7138,12 @@ int kswapd_run(int nid)
 err:
 	for (hid = 0; hid < MAX_KCOMPRESSD_THREADS; hid++) {
 		if (pgdat->kcompressd[hid]) {
-			kthread_stop(pgdat->kcompressd[hid]);
+			struct task_struct *tsk = pgdat->kcompressd[hid];
+
 			pgdat->kcompressd[hid] = NULL;
+			kthread_stop(tsk);
+			/* complete leftover items before freeing the queue */
+			kcompressd_drain_queue(pgdat, hid);
 		}
 		if (kfifo_initialized(&pgdat->kcompress_fifo[hid]))
 			kfifo_free(&pgdat->kcompress_fifo[hid]);
@@ -7166,6 +7170,8 @@ void kswapd_stop(int nid)
 		if (pgdat->kcompressd[hid]) {
 			kthread_stop(pgdat->kcompressd[hid]);
 			pgdat->kcompressd[hid] = NULL;
+			/* complete leftover items before freeing the queue */
+			kcompressd_drain_queue(pgdat, hid);
 			kfifo_free(&pgdat->kcompress_fifo[hid]);
 		}
 	}

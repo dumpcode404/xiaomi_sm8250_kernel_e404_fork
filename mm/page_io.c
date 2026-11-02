@@ -332,7 +332,15 @@ int kcompressd(void *p)
 		.for_reclaim = 1,
 	};
 
-	while (!kthread_should_stop()) {
+	/*
+	 * Drain the queue even after kthread_should_stop(): every queued
+	 * page is PageLocked by reclaim and must go through
+	 * __swap_writepage() exactly once, otherwise it stays locked on
+	 * the LRU forever. No new items can arrive once kswapd is
+	 * stopped, which kswapd_stop() guarantees before stopping us.
+	 */
+	while (!kthread_should_stop() ||
+	       !kfifo_is_empty(&pgdat->kcompress_fifo[hid])) {
 		wait_event_interruptible(pgdat->kcompressd_wait[hid],
 				!kfifo_is_empty(&pgdat->kcompress_fifo[hid]) ||
 				kthread_should_stop());
@@ -349,6 +357,37 @@ int kcompressd(void *p)
 
 	kfree(kcd);
 	return 0;
+}
+
+/*
+ * Drain leftover queue items after the worker has stopped, e.g. pages
+ * enqueued in the race window between the worker's last queue check and
+ * its exit. Every queued page is PageLocked by reclaim and must complete
+ * __swap_writepage() exactly once. Call only when no producer can enqueue
+ * anymore (kswapd already stopped) or the entry is already detached
+ * (kcompressd[hid] == NULL).
+ */
+void kcompressd_drain_queue(pg_data_t *pgdat, int hid)
+{
+	struct page *page;
+	struct writeback_control wbc = {
+		.sync_mode = WB_SYNC_NONE,
+		.nr_to_write = SWAP_CLUSTER_MAX,
+		.range_start = 0,
+		.range_end = LLONG_MAX,
+		.for_reclaim = 1,
+	};
+
+	if (!kfifo_initialized(&pgdat->kcompress_fifo[hid]))
+		return;
+
+	while (!kfifo_is_empty(&pgdat->kcompress_fifo[hid])) {
+		if (!kfifo_out(&pgdat->kcompress_fifo[hid],
+				&page, sizeof(page)))
+			break;
+		__swap_writepage(page, &wbc, end_swap_bio_write);
+		cond_resched();
+	}
 }
 
 static inline void count_swpout_vm_event(struct page *page)
