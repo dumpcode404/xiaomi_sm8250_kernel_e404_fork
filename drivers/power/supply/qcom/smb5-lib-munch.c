@@ -3510,9 +3510,15 @@ int smblib_set_prop_dc_temp_level(struct smb_charger *chg,
 
 static int smblib_therm_charging(struct smb_charger *chg)
 {
-	int thermal_icl_ua = 0;
-	int thermal_fcc_ua = 0;
+	int thermal_icl_ua;
+	int thermal_fcc_ua;
+	int snap_pd_active;
+	int snap_temp_level;
+	int snap_charger_type;
+	bool rechecked;
 	int rc;
+
+	rechecked = false;
 
 #ifdef CONFIG_D8G_SERVICE
 	if (skip_thermal || bypass_charging)
@@ -3522,8 +3528,32 @@ static int smblib_therm_charging(struct smb_charger *chg)
 	if (chg->thermal_remove)
 			chg->system_temp_level = 0;
 
-	if (chg->system_temp_level >= MAX_TEMP_LEVEL)
+	/*
+	 * Snapshot the lockless state that drives the thermal decision.
+	 * READ_ONCE only forces the compiler to emit one load per read;
+	 * it does not make this three-field snapshot atomic and does not
+	 * order against concurrent writers. A transition that lands
+	 * between the snapshot and the final check is caught by the
+	 * single bounded re-evaluation at the end of the function.
+	 */
+reevaluate_thermal:
+	thermal_icl_ua = 0;
+	thermal_fcc_ua = 0;
+	rc = 0;
+	snap_pd_active = READ_ONCE(chg->pd_active);
+	snap_temp_level = READ_ONCE(chg->system_temp_level);
+	snap_charger_type = READ_ONCE(chg->real_charger_type);
+
+	if (READ_ONCE(chg->system_temp_level) >= MAX_TEMP_LEVEL) {
+		if (!rechecked &&
+		    (READ_ONCE(chg->pd_active) != snap_pd_active ||
+		     READ_ONCE(chg->system_temp_level) != snap_temp_level ||
+		     READ_ONCE(chg->real_charger_type) != snap_charger_type)) {
+			rechecked = true;
+			goto reevaluate_thermal;
+		}
 		return 0;
+	}
 
 	switch (chg->real_charger_type) {
 	case POWER_SUPPLY_TYPE_USB_HVDCP:
@@ -3555,6 +3585,19 @@ static int smblib_therm_charging(struct smb_charger *chg)
 		break;
 	case POWER_SUPPLY_TYPE_USB_PD:
 		if (chg->pd_active == POWER_SUPPLY_PD_PPS_ACTIVE) {
+			/*
+			 * In PPS/CP mode thermal control moves to the FCC
+			 * (battery current) path. Clear any stale input-path
+			 * THERMAL_DAEMON_VOTER ICL vote left over from a
+			 * previous non-PPS state so the charge-pump path is
+			 * not capped by an input limit that no longer applies.
+			 * FCC thermal protection below remains fully active.
+			 */
+			if (get_client_vote_locked(chg->usb_icl_votable, THERMAL_DAEMON_VOTER) != 0) {
+				rc = vote(chg->usb_icl_votable, THERMAL_DAEMON_VOTER, false, 0);
+				if (rc < 0)
+					pr_err("Couldn't disable USB thermal ICL vote rc=%d\n", rc);
+			}
 			if (chg->pps_thermal_level < 0)
 				chg->pps_thermal_level = chg->system_temp_level;
 			thermal_fcc_ua =
@@ -3603,6 +3646,23 @@ static int smblib_therm_charging(struct smb_charger *chg)
 						rc);
 		}
 	}
+
+	/*
+	 * Single bounded re-evaluation: if the lockless charger or
+	 * thermal state changed while we were deciding and voting,
+	 * run the existing decision once more on fresh state. This
+	 * covers every switch arm, not just PPS, and runs exactly
+	 * once, so there is no livelock under flapping state. rc below
+	 * always reflects the last pass.
+	 */
+	if (!rechecked &&
+	    (READ_ONCE(chg->pd_active) != snap_pd_active ||
+	     READ_ONCE(chg->system_temp_level) != snap_temp_level ||
+	     READ_ONCE(chg->real_charger_type) != snap_charger_type)) {
+		rechecked = true;
+		goto reevaluate_thermal;
+	}
+
 	return rc;
 }
 
