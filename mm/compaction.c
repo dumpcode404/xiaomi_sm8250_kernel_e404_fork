@@ -1142,12 +1142,40 @@ static bool suitable_migration_source(struct compact_control *cc,
 	if (pageblock_skip_persistent(page))
 		return false;
 
-	if ((cc->mode != MIGRATE_ASYNC) || !cc->direct_compaction)
+	/*
+	 * Background compaction produces blocks for the zone at large, with
+	 * no particular allocation context. Allow all block types, including
+	 * CMA. Backport of mainline 1b4b697a5743.
+	 */
+	if (!cc->direct_compaction)
 		return true;
 
 	block_mt = get_pageblock_migratetype(page);
 
-	if (cc->migratetype == MIGRATE_MOVABLE)
+	/*
+	 * CMA pages can only be taken by ALLOC_CMA requests. For anybody
+	 * else, vacating a CMA block consumes free pages the caller could
+	 * have used, and produces free pages it cannot.
+	 */
+	if (is_migrate_cma(block_mt) && !(cc->alloc_flags & ALLOC_CMA))
+		return false;
+
+	/*
+	 * Per default, scans are restricted to blocks compatible with the
+	 * request, to prevent cross-contamination. Once compaction priority
+	 * escalates to synchronous scans, scan all blocks to try to make
+	 * forward progress. For non-movable requests this helps a lot, as
+	 * they can finally scan movable blocks.
+	 */
+	if (cc->mode != MIGRATE_ASYNC)
+		return true;
+
+	/*
+	 * Prevent <pageblock_order unmovable/reclaimable requests from
+	 * polluting movable blocks through fallbacks. Whole-block requests
+	 * are exempt as the allocator claims and converts the block.
+	 */
+	if (cc->migratetype == MIGRATE_MOVABLE || cc->order >= pageblock_order)
 		return is_migrate_movable(block_mt);
 	else
 		return block_mt == cc->migratetype;
@@ -1665,12 +1693,13 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 		return pfn;
 
 	/*
-	 * Only allow kcompactd and direct requests for movable pages to
-	 * quickly clear out a MOVABLE pageblock for allocation. This
-	 * reduces the risk that a large movable pageblock is freed for
-	 * an unmovable/reclaimable small allocation.
+	 * Prevent <pageblock_order unmovable/reclaimable requests from
+	 * polluting movable blocks through fallbacks. Whole-block requests
+	 * are exempt as the allocator claims and converts the block.
+	 * Backport of mainline 1b4b697a5743.
 	 */
-	if (cc->direct_compaction && cc->migratetype != MIGRATE_MOVABLE)
+	if (cc->direct_compaction && cc->migratetype != MIGRATE_MOVABLE &&
+	    cc->order < pageblock_order)
 		return pfn;
 
 	/*
