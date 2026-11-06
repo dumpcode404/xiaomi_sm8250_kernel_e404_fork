@@ -117,15 +117,13 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 				next_target = THERMAL_NO_TARGET;
 		} else if (!throttle && trend == THERMAL_TREND_DROPPING) {
 			/*
-			 * No mitigation necessary: request the lower
-			 * state straight away instead of stepping down
-			 * one level per poll. Backport of hunk 1 of
-			 * mainline 52903814; the second hunk (removing
-			 * tz->passive++/--) is intentionally omitted:
-			 * 4.19 still manages passive polling refcounts
-			 * in this governor.
+			 * No mitigation necessary: clear the vote so a
+			 * shared cooling device is not pinned by a stale
+			 * non-zero lower bound. Backport of mainline
+			 * ec0d8915, stacked on the 2e823683/52903814
+			 * adaptations above.
 			 */
-			next_target = instance->lower;
+			next_target = THERMAL_NO_TARGET;
 		} else {
 			if (!throttle) {
 				next_target = cur_state - 1;
