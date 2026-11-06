@@ -3946,6 +3946,19 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
 	}
 
 	/*
+	 * A concurrent ager may already have advanced max_seq past the
+	 * sequence we were asked to age -- walking the mm list again
+	 * would be wasted CPU. Skip stale sequences. Backport of the
+	 * seq < max_seq guard from mainline 5b306375a4aa, relocated here
+	 * because 4.19 ages through try_to_inc_max_seq() (there is no
+	 * run_aging() in this tree).
+	 */
+	if (max_seq < READ_ONCE(lrugen->max_seq)) {
+		success = false;
+		goto done;
+	}
+
+	/*
 	 * If the hardware doesn't automatically set the accessed bit, fallback
 	 * to lru_gen_look_around(), which only clears the accessed bit in a
 	 * handful of PTEs. Spreading the work out over a period of time usually
