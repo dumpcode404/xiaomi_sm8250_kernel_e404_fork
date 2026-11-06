@@ -464,10 +464,20 @@ static ssize_t idle_store(struct device *dev,
 		 */
 		u64 age_sec;
 
-		if (IS_ENABLED(CONFIG_ZRAM_MEMORY_TRACKING) && !kstrtoull(buf, 0, &age_sec))
-			cutoff_time = ktime_sub(ktime_get_boottime(),
+		if (IS_ENABLED(CONFIG_ZRAM_MEMORY_TRACKING) && !kstrtoull(buf, 0, &age_sec)) {
+			u64 uptime_sec = ktime_get_boottime_seconds();
+
+			/*
+			 * No slot can be older than the system uptime.
+			 * Without this clamp an age larger than the uptime
+			 * underflows the cutoff computation below and no
+			 * page is ever marked idle. Backport of the
+			 * cutoff clamp from mainline 59042a88efe1.
+			 */
+			if (age_sec < uptime_sec)
+				cutoff_time = ktime_sub(ktime_get_boottime(),
 					ns_to_ktime(age_sec * NSEC_PER_SEC));
-		else
+		} else
 			goto out;
 	}
 
