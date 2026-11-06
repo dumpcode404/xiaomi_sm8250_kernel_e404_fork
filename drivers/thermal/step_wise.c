@@ -115,6 +115,17 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 			instance->target <= instance->lower) {
 			if (!throttle)
 				next_target = THERMAL_NO_TARGET;
+		} else if (!throttle && trend == THERMAL_TREND_DROPPING) {
+			/*
+			 * No mitigation necessary: request the lower
+			 * state straight away instead of stepping down
+			 * one level per poll. Backport of hunk 1 of
+			 * mainline 52903814; the second hunk (removing
+			 * tz->passive++/--) is intentionally omitted:
+			 * 4.19 still manages passive polling refcounts
+			 * in this governor.
+			 */
+			next_target = instance->lower;
 		} else {
 			if (!throttle) {
 				next_target = cur_state - 1;
