@@ -3342,7 +3342,17 @@ struct page *rmqueue(struct zone *preferred_zone,
 	do {
 		page = NULL;
 
-		if (alloc_flags & ALLOC_HARDER) {
+		/*
+		 * Dip into HIGHATOMIC reserves only for OOM victims and
+		 * genuine atomic requests -- not for every ALLOC_HARDER
+		 * holder (e.g. RT tasks), so the reserves survive for the
+		 * future high-order atomic allocations they exist for.
+		 * Backport of the reserve-narrowing from mainline
+		 * 6ee3d87b9408.
+		 */
+		if ((alloc_flags & ALLOC_OOM) ||
+		    ((alloc_flags & ALLOC_HARDER) &&
+		     (gfp_flags & __GFP_ATOMIC))) {
 			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 			if (page)
 				trace_mm_page_alloc_zone_locked(page, order, migratetype);
