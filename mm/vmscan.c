@@ -5684,6 +5684,22 @@ static bool pgdat_memcg_congested(pg_data_t *pgdat, struct mem_cgroup *memcg)
 		(memcg && memcg_congested(pgdat, memcg));
 }
 
+static bool pgdat_balanced(pg_data_t *pgdat, int order, int classzone_idx);
+
+static void kswapd_try_clear_hopeless(struct pglist_data *pgdat,
+				      unsigned int order, int highest_zoneidx)
+{
+	/*
+	 * Reset kswapd_failures only when the node is balanced. Without
+	 * this check, successful direct reclaim (e.g. from cgroup
+	 * memory.high throttling) can keep resetting kswapd_failures even
+	 * when the node cannot be balanced, causing kswapd to run
+	 * endlessly. Backport of mainline dc9fe9b7056a.
+	 */
+	if (pgdat_balanced(pgdat, order, highest_zoneidx))
+		pgdat->kswapd_failures = 0;
+}
+
 static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 {
 	struct reclaim_state *reclaim_state = current->reclaim_state;
@@ -5866,7 +5882,7 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 	 * successful direct reclaim run will revive a dormant kswapd.
 	 */
 	if (reclaimable)
-		pgdat->kswapd_failures = 0;
+		kswapd_try_clear_hopeless(pgdat, sc->order, sc->reclaim_idx);
 
 	return reclaimable;
 }
