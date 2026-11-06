@@ -3797,7 +3797,19 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 			VM_WARN_ON_ONCE_PAGE(page_zonenum(page) != zone, page);
 
 			new_gen = page_inc_gen(lruvec, page, false);
-			list_move_tail(&page->lru, &lrugen->lists[new_gen][type][zone]);
+			/*
+			 * If the generation did not advance, this is a
+			 * promotion of a hot page -- keep it at the head
+			 * so it is not evicted ahead of genuinely cold
+			 * pages (cold/hot inversion). Otherwise the page
+			 * really aged: queue it at the tail of the
+			 * second-oldest generation. Backport of mainline
+			 * e90113a8e0e8; struct-page lists, no folios here.
+			 */
+			if (new_gen == old_gen)
+				list_move(&page->lru, &lrugen->lists[new_gen][type][zone]);
+			else
+				list_move_tail(&page->lru, &lrugen->lists[new_gen][type][zone]);
 
 			if (!--remaining)
 				return false;
