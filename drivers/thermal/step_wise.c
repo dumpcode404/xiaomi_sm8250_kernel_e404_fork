@@ -96,6 +96,21 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 		break;
 	case THERMAL_TREND_DROPPING:
 	case THERMAL_TREND_STABLE:
+		if (throttle) {
+			/*
+			 * The zone temperature is falling but still
+			 * above the trip: reduce the cooling level
+			 * early, while keeping it above the instance
+			 * lower limit so the temperature is pulled
+			 * further down. Backport of mainline 2e823683.
+			 */
+			if (trend == THERMAL_TREND_DROPPING)
+				next_target = clamp(cur_state - 1,
+						    min(instance->lower + 1,
+							instance->upper),
+						    instance->upper);
+			break;
+		}
 		if (cur_state <= instance->lower ||
 			instance->target <= instance->lower) {
 			if (!throttle)
