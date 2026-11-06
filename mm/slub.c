@@ -3443,6 +3443,9 @@ static void early_kmem_cache_node_alloc(int node)
 
 	n = page->freelist;
 	BUG_ON(!n);
+	/* Detach the node object from the slab freelist. Backport of
+	 * mainline d15d7703166d. */
+	set_freepointer(kmem_cache_node, n, NULL);
 #ifdef CONFIG_SLUB_DEBUG
 	init_object(kmem_cache_node, n, SLUB_RED_ACTIVE);
 	init_tracking(kmem_cache_node, n);
