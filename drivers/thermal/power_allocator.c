@@ -293,10 +293,17 @@ static void divvy_up_power(u32 *req_power, u32 *max_power, int num_actors,
 	int i;
 
 	/*
-	 * Prevent division by 0 if none of the actors request power.
+	 * Nobody requested anything, just give everybody
+	 * the maximum power. Otherwise divvy_up_power() would
+	 * grant zero power and a sudden load would be throttled
+	 * until the next polling period.
 	 */
-	if (!total_req_power)
-		total_req_power = 1;
+	if (!total_req_power) {
+		for (i = 0; i < num_actors; i++)
+			granted_power[i] = max_power[i];
+
+		return;
+	}
 
 	capped_extra_power = 0;
 	extra_power = 0;
