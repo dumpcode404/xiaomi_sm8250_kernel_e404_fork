@@ -5,6 +5,7 @@
 #include <dt-bindings/clock/qcom,camcc-kona.h>
 #include <dt-bindings/clock/qcom,rpmh.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/thermal/thermal.h>
 
 #include "munch-sm8250.dtsi"
 #include "munch-sm8250-camera-sensor-mtp.dtsi"
@@ -12,4 +13,52 @@
 	model = "Qualcomm Technologies, Inc. xiaomi munch";
 	compatible = "qcom,kona-mtp", "qcom,kona", "qcom,mtp";
 	qcom,board-id = <50 0>;
+};
+
+/*
+ * Board-specific IPA zone for the Gold/Prime CPU cluster. Kept in the
+ * munch overlay (not the shared Kona thermal files) so other boards are
+ * unaffected. Uses the big-cluster tsens aggregate already sampled by
+ * cpuss-1-usr, with the Gold/Prime CPUs bound as power-actor cooling
+ * devices. sustainable-power is a starting test seed for closed-loop
+ * skin-temperature validation, not a characterized limit.
+ */
+&thermal_zones {
+	ipa-cpu-step {
+		polling-delay-passive = <10>;
+		polling-delay = <100>;
+		thermal-governor = "power_allocator";
+		sustainable-power = <2500>;
+		thermal-sensors = <&tsens0 6>;
+		trips {
+			ipa_cpu_trip: ipa-cpu-trip {
+				temperature = <90000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+		};
+
+		cooling-maps {
+			ipa_cpu4_cdev {
+				trip = <&ipa_cpu_trip>;
+				cooling-device = <&CPU4 THERMAL_NO_LIMIT
+						    THERMAL_NO_LIMIT>;
+			};
+			ipa_cpu5_cdev {
+				trip = <&ipa_cpu_trip>;
+				cooling-device = <&CPU5 THERMAL_NO_LIMIT
+						    THERMAL_NO_LIMIT>;
+			};
+			ipa_cpu6_cdev {
+				trip = <&ipa_cpu_trip>;
+				cooling-device = <&CPU6 THERMAL_NO_LIMIT
+						    THERMAL_NO_LIMIT>;
+			};
+			ipa_cpu7_cdev {
+				trip = <&ipa_cpu_trip>;
+				cooling-device = <&CPU7 THERMAL_NO_LIMIT
+						    THERMAL_NO_LIMIT>;
+			};
+		};
+	};
 };
