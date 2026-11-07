@@ -661,11 +661,20 @@ __vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 	__vma_link_rb(mm, vma, rb_link, rb_parent);
 }
 
-static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
+static int vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 			struct vm_area_struct *prev, struct rb_node **rb_link,
 			struct rb_node *rb_parent)
 {
 	struct address_space *mapping = NULL;
+	MA_STATE(mas, &mm->mm_mt, 0, 0);
+
+	/*
+	 * Preallocate maple nodes first: on ENOMEM nothing has been
+	 * mutated yet, so the caller can unwind cleanly. The rbtree
+	 * path below remains authoritative until the lookup flip.
+	 */
+	if (mas_preallocate(&mas, vma, GFP_KERNEL))
+		return -ENOMEM;
 
 	if (vma->vm_file) {
 		mapping = vma->vm_file->f_mapping;
@@ -673,6 +682,7 @@ static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 
 	__vma_link(mm, vma, prev, rb_link, rb_parent);
+	vma_mas_store(vma, &mas);
 	__vma_link_file(vma);
 
 	if (mapping)
@@ -680,6 +690,7 @@ static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	mm->map_count++;
 	validate_mm(mm);
+	return 0;
 }
 
 /*
@@ -1846,7 +1857,9 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		vma_set_anonymous(vma);
 	}
 
-	vma_link(mm, vma, prev, rb_link, rb_parent);
+	error = vma_link(mm, vma, prev, rb_link, rb_parent);
+	if (error)
+		goto free_vma;
 	/* Once vma denies write, undo our temporary denial count */
 	if (file) {
 		if (vm_flags & VM_SHARED)
@@ -3064,7 +3077,11 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	vma->vm_pgoff = pgoff;
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
-	vma_link(mm, vma, prev, rb_link, rb_parent);
+	if (vma_link(mm, vma, prev, rb_link, rb_parent)) {
+		vm_area_free(vma);
+		vm_unacct_memory(len >> PAGE_SHIFT);
+		return -ENOMEM;
+	}
 out:
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
@@ -3212,7 +3229,8 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 		vma->vm_pgoff = vma->vm_start >> PAGE_SHIFT;
 	}
 
-	vma_link(mm, vma, prev, rb_link, rb_parent);
+	if (vma_link(mm, vma, prev, rb_link, rb_parent))
+		return -ENOMEM;
 	return 0;
 }
 
@@ -3298,11 +3316,18 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 			get_file(new_vma->vm_file);
 		if (new_vma->vm_ops && new_vma->vm_ops->open)
 			new_vma->vm_ops->open(new_vma);
-		vma_link(mm, new_vma, prev, rb_link, rb_parent);
+		if (vma_link(mm, new_vma, prev, rb_link, rb_parent))
+			goto out_vma_link;
 		*need_rmap_locks = false;
 	}
 	return new_vma;
 
+out_vma_link:
+	if (new_vma->vm_ops && new_vma->vm_ops->close)
+		new_vma->vm_ops->close(new_vma);
+	if (new_vma->vm_file)
+		fput(new_vma->vm_file);
+	unlink_anon_vmas(new_vma);
 out_free_mempol:
 	mpol_put(vma_policy(new_vma));
 out_free_vma:
