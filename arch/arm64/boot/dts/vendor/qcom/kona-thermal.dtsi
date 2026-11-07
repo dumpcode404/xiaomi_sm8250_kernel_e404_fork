@@ -678,7 +678,8 @@
 	gpuss-max-step {
 		polling-delay-passive = <10>;
 		polling-delay = <100>;
-		thermal-governor = "step_wise";
+		thermal-governor = "power_allocator";
+		sustainable-power = <1500>;
 		wake-capable-sensor;
 		trips {
 			gpu_trip0: gpu-trip0 {
