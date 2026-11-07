@@ -4453,7 +4453,7 @@ int ipa3_cfg_ep(u32 clnt_hdl, const struct ipa_ep_cfg *ipa_ep_cfg)
 	return 0;
 }
 
-static const char *ipa3_get_nat_en_str(enum ipa_nat_en_type nat_en)
+static const char *__maybe_unused ipa3_get_nat_en_str(enum ipa_nat_en_type nat_en)
 {
 	switch (nat_en) {
 	case (IPA_BYPASS_NAT):
@@ -4467,7 +4467,7 @@ static const char *ipa3_get_nat_en_str(enum ipa_nat_en_type nat_en)
 	return "undefined";
 }
 
-static const char *ipa3_get_ipv6ct_en_str(enum ipa_ipv6ct_en_type ipv6ct_en)
+static const char *__maybe_unused ipa3_get_ipv6ct_en_str(enum ipa_ipv6ct_en_type ipv6ct_en)
 {
 	switch (ipv6ct_en) {
 	case (IPA_BYPASS_IPV6CT):
