@@ -11,6 +11,23 @@
 #include <linux/kernel.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
+/* 4.19 backport: this tree only defines lockdep_is_held() /
+ * lock_is_held() under CONFIG_LOCKDEP, while upstream (where this
+ * file comes from) provides them unconditionally. Stub them to true,
+ * matching the semantics of the lockdep_is_held_type() stub already
+ * present in this tree's linux/lockdep.h. Guarded so LOCKDEP=y
+ * builds keep using the real lockdep implementation. */
+#ifndef CONFIG_LOCKDEP
+struct lockdep_map;
+#ifndef lockdep_is_held
+#define lockdep_is_held(lock)		(1)
+#endif
+static inline int lock_is_held(const struct lockdep_map *lock)
+{
+	(void)lock;
+	return 1;
+}
+#endif
 /* #define CONFIG_MAPLE_RCU_DISABLED */
 /* #define CONFIG_DEBUG_MAPLE_TREE_VERBOSE */
 
