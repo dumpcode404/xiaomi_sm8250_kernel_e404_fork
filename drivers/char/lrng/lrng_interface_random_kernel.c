@@ -399,7 +399,7 @@ EXPORT_SYMBOL(wait_for_random_bytes);
  *
  * Return: number of bytes filled in.
  */
-size_t __must_check get_random_bytes_arch(void *buf, size_t nbytes)
+int __must_check get_random_bytes_arch(void *buf, int nbytes)
 {
 	size_t left = nbytes;
 	u8 *p = buf;
