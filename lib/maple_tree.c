@@ -57,6 +57,9 @@
 #include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/limits.h>
+/* 4.19 backport: this tree's spinlock.h does not pull in lockdep.h,
+ * but mas state validation uses lockdep_is_held(). */
+#include <linux/lockdep.h>
 #include <asm/barrier.h>
 
 #define CREATE_TRACE_POINTS

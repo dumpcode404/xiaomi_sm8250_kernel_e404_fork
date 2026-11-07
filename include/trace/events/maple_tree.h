@@ -12,6 +12,7 @@
 #define _TRACE_MAPLE_TREE_H
 
 #define trace_ma_op(...)		do { } while (0)
+#define trace_ma_read(...)		do { } while (0)
 #define trace_ma_write(...)		do { } while (0)
 
 #endif /* _TRACE_MAPLE_TREE_H */
