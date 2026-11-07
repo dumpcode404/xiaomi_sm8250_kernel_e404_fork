@@ -4804,7 +4804,7 @@ static int _bpf_setsockopt(struct sock *sk, int level, int optname,
 					SK_PACING_NONE,
 					SK_PACING_NEEDED);
 			sk->sk_max_pacing_rate = (val == ~0U) ?
-						 ~0UL : (unsigned int)val;
+						 ~0U : (unsigned int)val;
 			sk->sk_pacing_rate = min(sk->sk_pacing_rate,
 						 sk->sk_max_pacing_rate);
 			break;
