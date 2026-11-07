@@ -47,6 +47,10 @@
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
 
+/* 4.19 backport: tracepoints used by the maple helpers are no-ops
+ * (see include/trace/events/maple_tree.h). */
+#include <trace/events/maple_tree.h>
+
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
 #include <asm/tlb.h>
@@ -929,13 +933,13 @@ again:
 	 * retry) and a no-op if the entry is already gone.
 	 */
 	{
-		MA_STATE(mas_erase, &mm->mm_mt, vma->vm_start,
+		MA_STATE(mas_del, &mm->mm_mt, vma->vm_start,
 			 vma->vm_start);
-		mas_erase(&mas_erase);
+		mas_erase(&mas_del);
 		if (adjust_next) {
-			MA_STATE(mas_erase_next, &mm->mm_mt,
+			MA_STATE(mas_del_next, &mm->mm_mt,
 				 next->vm_start, next->vm_start);
-			mas_erase(&mas_erase_next);
+			mas_erase(&mas_del_next);
 		}
 	}
 
@@ -2498,9 +2502,9 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 					error = -ENOMEM;
 			}
 			if (!error) {
-				MA_STATE(mas_erase, &mm->mm_mt,
+				MA_STATE(mas_del, &mm->mm_mt,
 					 vma->vm_start, vma->vm_start);
-				mas_erase(&mas_erase);
+				mas_erase(&mas_del);
 				/*
 				 * vma_gap_update() doesn't support concurrent
 				 * updates, but we only hold a shared mmap_sem
@@ -2593,9 +2597,9 @@ int expand_downwards(struct vm_area_struct *vma,
 					error = -ENOMEM;
 			}
 			if (!error) {
-				MA_STATE(mas_erase, &mm->mm_mt,
+				MA_STATE(mas_del, &mm->mm_mt,
 					 vma->vm_start, vma->vm_start);
-				mas_erase(&mas_erase);
+				mas_erase(&mas_del);
 				/*
 				 * vma_gap_update() doesn't support concurrent
 				 * updates, but we only hold a shared mmap_sem
