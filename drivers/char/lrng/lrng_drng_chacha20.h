@@ -21,9 +21,6 @@ static inline void chacha_init_consts(u32 *state)
 	state[3] = 0x6b206574; /* "te k" */
 }
 
-#define CHACHA_BLOCK_SIZE	CHACHA20_BLOCK_SIZE
-#define CHACHA_KEY_SIZE		CHACHA20_KEY_SIZE
-
 /* State according to RFC 7539 section 2.3 */
 struct chacha20_block {
 	u32 constants[4];
