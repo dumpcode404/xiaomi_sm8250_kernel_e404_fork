@@ -1610,9 +1610,43 @@ static void rcu_lockdep_assert_cblist_protected(struct rcu_data *rdp)
  * Wake up any no-CBs CPUs' kthreads that were waiting on the just-ended
  * grace period.
  */
+static void rcu_nocb_cleanup_wake(struct swait_queue_head *sq)
+{
+	if (swait_active(sq))
+		swake_up_all(sq);
+}
+
+/*
+ * Wake up any no-CBs CPUs' kthreads that were waiting on the just-ended
+ * grace period.
+ *
+ * swait_active() can be checked first: a waiter that arrives after the
+ * check re-evaluates rcu_seq_done(&rnp->gp_seq, ...) inside
+ * swait_event_interruptible_exclusive() and observes the completed grace
+ * period without needing this wakeup, so no wakeup can be lost.
+ * Backport of the wake-gating from mainline 318606106c61.
+ */
 static void rcu_nocb_gp_cleanup(struct swait_queue_head *sq)
 {
-	swake_up_all(sq);
+	rcu_nocb_cleanup_wake(sq);
+}
+
+/*
+ * Wake NOCB rcuog kthreads on a leaf node so that they can advance
+ * callbacks that were waiting for the just-completed expedited grace
+ * period.
+ *
+ * The rcuog kthread waiting for a grace period sleeps on the per-leaf-node
+ * ->nocb_gp_wq[] (not on its rdp's ->nocb_gp_wq, which only signals that
+ * new callbacks have shown up), so this is the queue that must be woken.
+ * Both the even and odd waitqueues are woken because the expedited sequence
+ * does not share parity with the normal ->gp_seq the waiter indexed with.
+ * Backport of rcu_nocb_exp_cleanup() from mainline 318606106c61.
+ */
+static void rcu_nocb_exp_cleanup(struct rcu_node *rnp)
+{
+	rcu_nocb_cleanup_wake(&rnp->nocb_gp_wq[0]);
+	rcu_nocb_cleanup_wake(&rnp->nocb_gp_wq[1]);
 }
 
 static struct swait_queue_head *rcu_nocb_gp_get(struct rcu_node *rnp)
