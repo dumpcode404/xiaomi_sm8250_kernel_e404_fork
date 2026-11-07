@@ -10379,10 +10379,27 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 			continue;
 
 		if (env->sd->flags & SD_ASYM_CPUCAPACITY) {
-			/* Check for a misfit task on the cpu */
-			if (sgs->group_misfit_task_load < rq->misfit_task_load) {
-				sgs->group_misfit_task_load = rq->misfit_task_load;
-				*sg_status |= SG_OVERLOAD;
+			if (rq->misfit_task_load) {
+				/*
+				 * Always mark the root domain overloaded so
+				 * big CPUs can pick up misfit tasks via newly
+				 * idle balance. Backport of mainline
+				 * 0fbd428d0788.
+				 */
+				if (balancing_at_rd)
+					*sg_status |= SG_OVERLOAD;
+
+				/*
+				 * Only account misfit load if @dst_cpu can
+				 * help; otherwise the group may be classified
+				 * as misfit_task and update_sd_pick_busiest()
+				 * will skip a group that could never have
+				 * taken the task.
+				 */
+				if (capacity_greater(capacity_of(env->dst_cpu),
+						     group->sgc->max_capacity) &&
+				    (sgs->group_misfit_task_load < rq->misfit_task_load))
+					sgs->group_misfit_task_load = rq->misfit_task_load;
 			}
 		} else if (env->idle && sched_reduced_capacity(rq, env->sd)) {
 			/* Check for a task running on a CPU with reduced capacity */
