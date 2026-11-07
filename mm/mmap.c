@@ -718,6 +718,12 @@ static __always_inline void __vma_unlink_common(struct mm_struct *mm,
 	struct vm_area_struct *next;
 
 	vma_rb_erase_ignore(vma, &mm->mm_rb, ignore);
+	{
+		/* Dual-maintain mm_mt: erase is self-contained (internal
+		 * GFP_KERNEL retry) so no preallocation is needed here. */
+		MA_STATE(mas, &mm->mm_mt, vma->vm_start, vma->vm_start);
+		mas_erase(&mas);
+	}
 	next = vma->vm_next;
 	if (has_prev)
 		prev->vm_next = next;
@@ -2672,6 +2678,11 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	vma->vm_prev = NULL;
 	do {
 		vma_rb_erase(vma, &mm->mm_rb);
+		{
+			MA_STATE(mas, &mm->mm_mt, vma->vm_start,
+				 vma->vm_start);
+			mas_erase(&mas);
+		}
 		mm->map_count--;
 		tail_vma = vma;
 		vma = vma->vm_next;
