@@ -3287,6 +3287,12 @@ void exit_mmap(struct mm_struct *mm)
 		vma = remove_vma(vma);
 		cond_resched();
 	}
+#ifdef CONFIG_MAPLE_TREE
+	/* Drop the dual-maintained tree with the mm. All entries were
+	 * already unlinked above; this frees any remaining maple nodes
+	 * back to the maple_node_cache slab. */
+	mtree_destroy(&mm->mm_mt);
+#endif
 	vm_unacct_memory(nr_accounted);
 }
 
