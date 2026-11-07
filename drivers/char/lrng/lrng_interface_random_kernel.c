@@ -8,9 +8,11 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/blkdev.h>
+#include <linux/err.h>
 #include <linux/hw_random.h>
 #include <linux/kthread.h>
 #include <linux/lrng.h>
+#include <linux/module.h>
 #include <linux/random.h>
 
 #include "lrng_es_aux.h"
@@ -71,9 +73,67 @@ int __cold execute_with_initialized_rng(struct notifier_block *nb)
 	return ret;
 }
 
+/* 4.19 compatibility: legacy random.c API entry points.
+ * start_kernel() calls rand_initialize(), and crypto/drbg.c uses the
+ * struct random_ready_callback API. Both were provided by
+ * drivers/char/random.c, which is not compiled with LRNG_DEFAULT=n.
+ * Content below is backport glue, not upstream logic. */
+int __init rand_initialize(void)
+{
+	lrng_rand_initialize_early();
+	lrng_rand_initialize();
+	return 0;
+}
+
+static LIST_HEAD(legacy_ready_list);
+static DEFINE_SPINLOCK(legacy_ready_lock);
+
+int add_random_ready_callback(struct random_ready_callback *rdy)
+{
+	unsigned long flags;
+
+	if (!try_module_get(rdy->owner))
+		return -ENOENT;
+	if (rng_is_initialized()) {
+		module_put(rdy->owner);
+		return -EALREADY;
+	}
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	list_add_tail(&rdy->list, &legacy_ready_list);
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
+	return 0;
+}
+EXPORT_SYMBOL(add_random_ready_callback);
+
+void del_random_ready_callback(struct random_ready_callback *rdy)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	if (!list_empty(&rdy->list)) {
+		list_del_init(&rdy->list);
+		module_put(rdy->owner);
+	}
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
+}
+EXPORT_SYMBOL(del_random_ready_callback);
+
 void lrng_kick_random_ready(void)
 {
+	struct random_ready_callback *rdy, *tmp;
+	unsigned long flags;
+
 	atomic_notifier_call_chain(&random_ready_notifier, 0, NULL);
+	/* fire legacy 4.19 callbacks stashed above */
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	list_for_each_entry_safe(rdy, tmp, &legacy_ready_list, list) {
+		list_del_init(&rdy->list);
+		spin_unlock_irqrestore(&legacy_ready_lock, flags);
+		rdy->func(rdy);
+		module_put(rdy->owner);
+		spin_lock_irqsave(&legacy_ready_lock, flags);
+	}
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
 }
 
 bool lrng_ready_chain_has_sleeper(void)
@@ -117,7 +177,7 @@ void lrng_process_ready_list(void)
  * @count: length of buffer
  * @entropy_bits: amount of entropy in buffer (value is in bits)
  */
-void add_hwgenerator_randomness(const void *buffer, size_t count,
+void add_hwgenerator_randomness(const char *buffer, size_t count,
 				size_t entropy_bits)
 {
 	/*
@@ -131,7 +191,7 @@ void add_hwgenerator_randomness(const void *buffer, size_t count,
 				lrng_state_exseed_allow(lrng_noise_source_hw) ||
 				kthread_should_stop());
 	lrng_state_exseed_set(lrng_noise_source_hw, false);
-	lrng_pool_insert_aux(buffer, count, entropy_bits);
+	lrng_pool_insert_aux((const u8 *)buffer, count, entropy_bits);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
 
@@ -146,7 +206,7 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  *	 insert into entropy pool.
  * @size: length of buffer
  */
-void __init add_bootloader_randomness(const void *buf, size_t size)
+void __init add_bootloader_randomness(const void *buf, unsigned int size)
 {
 	lrng_pool_insert_aux(buf, size, lrng_trust_bootloader ? size * 8 : 0);
 }
@@ -181,7 +241,7 @@ EXPORT_SYMBOL_GPL(add_input_randomness);
  *	 insert into entropy pool.
  * @size: length of buffer
  */
-void add_device_randomness(const void *buf, size_t size)
+void add_device_randomness(const void *buf, unsigned int size)
 {
 	lrng_pool_insert_aux((u8 *)buf, size, 0);
 }
@@ -194,7 +254,11 @@ EXPORT_SYMBOL(add_disk_randomness);
 #endif
 
 #ifndef CONFIG_LRNG_IRQ
-void add_interrupt_randomness(int irq) { }
+void add_interrupt_randomness(int irq, int irq_flags)
+{
+	(void)irq;
+	(void)irq_flags;
+}
 EXPORT_SYMBOL(add_interrupt_randomness);
 #endif
 
@@ -294,7 +358,7 @@ EXPORT_SYMBOL_GPL(unregister_random_vmfork_notifier);
  * @buf: buffer to store the random bytes
  * @nbytes: size of the buffer
  */
-void get_random_bytes(void *buf, size_t nbytes)
+void get_random_bytes(void *buf, int nbytes)
 {
 	lrng_get_random_bytes(buf, nbytes);
 }

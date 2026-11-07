@@ -657,8 +657,9 @@ static void lrng_time_process(void)
 }
 
 /* Hot code path - Callback for interrupt handler */
-void add_interrupt_randomness(int irq)
+void add_interrupt_randomness(int irq, int irq_flags)
 {
+	(void)irq_flags;
 	if (lrng_highres_timer()) {
 		lrng_time_process();
 	} else {
