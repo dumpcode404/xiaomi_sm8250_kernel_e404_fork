@@ -697,7 +697,8 @@ static int vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
  * Helper for vma_adjust() in the split_vma insert case: insert a vma into the
  * mm's list and rbtree.  It has already been inserted into the interval tree.
  */
-static void __insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
+static void __insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma,
+			       struct ma_state *mas)
 {
 	struct vm_area_struct *prev;
 	struct rb_node **rb_link, *rb_parent;
@@ -706,6 +707,7 @@ static void __insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 			   &prev, &rb_link, &rb_parent))
 		BUG();
 	__vma_link(mm, vma, prev, rb_link, rb_parent);
+	vma_mas_store(vma, mas);
 	mm->map_count++;
 }
 
@@ -768,6 +770,13 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	bool start_changed = false, end_changed = false;
 	long adjust_next = 0;
 	int remove_next = 0;
+	/* Dual-maintain mm_mt through in-place boundary changes. The
+	 * preallocated states below are consumed by the restore stores;
+	 * preallocation happens before any mutation so ENOMEM unwinds
+	 * cleanly with both trees untouched. */
+	MA_STATE(mas, &mm->mm_mt, 0, 0);
+	MA_STATE(mas_next, &mm->mm_mt, 0, 0);
+	MA_STATE(mas_insert, &mm->mm_mt, 0, 0);
 
 	if (next && !insert) {
 		struct vm_area_struct *exporter = NULL, *importer = NULL;
@@ -888,11 +897,46 @@ again:
 			anon_vma_interval_tree_pre_update_vma(next);
 	}
 
+	/*
+	 * Preallocate maple nodes before touching either tree: on
+	 * ENOMEM nothing has been mutated yet, so the caller can
+	 * unwind cleanly (this mirrors the vma_link() ordering).
+	 */
+	if (mas_preallocate(&mas, vma, GFP_KERNEL))
+		return -ENOMEM;
+	if (insert && mas_preallocate(&mas_insert, insert, GFP_KERNEL)) {
+		mas_destroy(&mas);
+		return -ENOMEM;
+	}
+	if (adjust_next && !remove_next &&
+	    mas_preallocate(&mas_next, next, GFP_KERNEL)) {
+		mas_destroy(&mas);
+		if (insert)
+			mas_destroy(&mas_insert);
+		return -ENOMEM;
+	}
+
 	if (root) {
 		flush_dcache_mmap_lock(mapping);
 		vma_interval_tree_remove(vma, root);
 		if (adjust_next)
 			vma_interval_tree_remove(next, root);
+	}
+
+	/*
+	 * Dual-maintain mm_mt: erase the old ranges before mutating
+	 * them in place. Erase is self-contained (internal GFP_KERNEL
+	 * retry) and a no-op if the entry is already gone.
+	 */
+	{
+		MA_STATE(mas_erase, &mm->mm_mt, vma->vm_start,
+			 vma->vm_start);
+		mas_erase(&mas_erase);
+		if (adjust_next) {
+			MA_STATE(mas_erase_next, &mm->mm_mt,
+				 next->vm_start, next->vm_start);
+			mas_erase(&mas_erase_next);
+		}
 	}
 
 	if (start != vma->vm_start) {
@@ -942,7 +986,7 @@ again:
 		 * us to insert it before dropping the locks
 		 * (it may either follow vma or precede it).
 		 */
-		__insert_vm_struct(mm, insert);
+		__insert_vm_struct(mm, insert, &mas_insert);
 	} else {
 		if (start_changed)
 			vma_gap_update(vma);
@@ -953,6 +997,15 @@ again:
 				vma_gap_update(next);
 		}
 	}
+
+	/*
+	 * Dual-maintain mm_mt: re-store the surviving VMA(s) with their
+	 * final bounds, consuming the preallocated nodes. Unlinked VMAs
+	 * were already erased (explicitly above, or via the unlink paths).
+	 */
+	vma_mas_store(vma, &mas);
+	if (adjust_next && !remove_next)
+		vma_mas_store(next, &mas_next);
 
 	if (anon_vma) {
 		anon_vma_interval_tree_post_update_vma(vma);
@@ -2387,6 +2440,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 	struct vm_area_struct *next;
 	unsigned long gap_addr;
 	int error = 0;
+	MA_STATE(mas, &mm->mm_mt, 0, 0);
 
 	if (!(vma->vm_flags & VM_GROWSUP))
 		return -EFAULT;
@@ -2435,6 +2489,19 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 			error = acct_stack_growth(vma, size, grow);
 			if (!error) {
 				/*
+				 * Dual-maintain mm_mt: preallocate first so
+				 * ENOMEM unwinds before any mutation (GFP_KERNEL
+				 * is safe here; this path already sleeps in
+				 * acct_stack_growth()).
+				 */
+				if (mas_preallocate(&mas, vma, GFP_KERNEL))
+					error = -ENOMEM;
+			}
+			if (!error) {
+				MA_STATE(mas_erase, &mm->mm_mt,
+					 vma->vm_start, vma->vm_start);
+				mas_erase(&mas_erase);
+				/*
 				 * vma_gap_update() doesn't support concurrent
 				 * updates, but we only hold a shared mmap_sem
 				 * lock here, so we need to protect against
@@ -2457,6 +2524,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 				else
 					mm->highest_vm_end = vm_end_gap(vma);
 				spin_unlock(&mm->page_table_lock);
+				vma_mas_store(vma, &mas);
 
 				perf_event_mmap(vma);
 			}
@@ -2478,6 +2546,7 @@ int expand_downwards(struct vm_area_struct *vma,
 	struct mm_struct *mm = vma->vm_mm;
 	struct vm_area_struct *prev;
 	int error = 0;
+	MA_STATE(mas, &mm->mm_mt, 0, 0);
 
 	address &= PAGE_MASK;
 	if (address < mmap_min_addr)
@@ -2515,6 +2584,19 @@ int expand_downwards(struct vm_area_struct *vma,
 			error = acct_stack_growth(vma, size, grow);
 			if (!error) {
 				/*
+				 * Dual-maintain mm_mt: preallocate first so
+				 * ENOMEM unwinds before any mutation (GFP_KERNEL
+				 * is safe here; this path already sleeps in
+				 * acct_stack_growth()).
+				 */
+				if (mas_preallocate(&mas, vma, GFP_KERNEL))
+					error = -ENOMEM;
+			}
+			if (!error) {
+				MA_STATE(mas_erase, &mm->mm_mt,
+					 vma->vm_start, vma->vm_start);
+				mas_erase(&mas_erase);
+				/*
 				 * vma_gap_update() doesn't support concurrent
 				 * updates, but we only hold a shared mmap_sem
 				 * lock here, so we need to protect against
@@ -2535,6 +2617,7 @@ int expand_downwards(struct vm_area_struct *vma,
 				anon_vma_interval_tree_post_update_vma(vma);
 				vma_gap_update(vma);
 				spin_unlock(&mm->page_table_lock);
+				vma_mas_store(vma, &mas);
 
 				perf_event_mmap(vma);
 			}
