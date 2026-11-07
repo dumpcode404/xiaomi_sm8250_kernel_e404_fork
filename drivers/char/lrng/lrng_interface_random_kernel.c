@@ -118,6 +118,28 @@ void del_random_ready_callback(struct random_ready_callback *rdy)
 }
 EXPORT_SYMBOL(del_random_ready_callback);
 
+/* Drop-in for the legacy random.c helper used by arch_randomize_brk().
+ * Implementation is the unchanged legacy algorithm operating on the
+ * LRNG-backed get_random_long(). */
+unsigned long randomize_page(unsigned long start, unsigned long range)
+{
+	if (!PAGE_ALIGNED(start)) {
+		range -= PAGE_ALIGN(start) - start;
+		start = PAGE_ALIGN(start);
+	}
+
+	if (start > ULONG_MAX - range)
+		range = ULONG_MAX - start;
+
+	range >>= PAGE_SHIFT;
+
+	if (range == 0)
+		return start;
+
+	return start + (get_random_long() % range << PAGE_SHIFT);
+}
+EXPORT_SYMBOL(randomize_page);
+
 void lrng_kick_random_ready(void)
 {
 	struct random_ready_callback *rdy, *tmp;
