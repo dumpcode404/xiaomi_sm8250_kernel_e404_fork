@@ -21,7 +21,12 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <crypto/chacha20.h>
+#include <crypto/chacha.h>
+/* 4.19 adaptation: crypto/chacha20.h does not exist here yet; the
+ * 4.19 crypto/chacha.h carries the same primitives under CHACHA_*
+ * names, and its chacha20_block() has an identical signature. */
+#define CHACHA20_KEY_SIZE	CHACHA_KEY_SIZE
+#define CHACHA20_BLOCK_SIZE	CHACHA_BLOCK_SIZE
 #include <linux/cryptohash.h>
 #include <linux/lrng.h>
 #include <linux/random.h>
