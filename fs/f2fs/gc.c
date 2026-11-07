@@ -1849,7 +1849,7 @@ retry:
 	if (seg_freed == f2fs_usable_segs_in_sec(sbi, segno))
 		sec_freed++;
 
-	if (gc_type == FG_GC)
+	if (gc_type == FG_GC && seg_freed)
 		sbi->cur_victim_sec = NULL_SEGNO;
 
 	if (gc_control->init_gc_type == FG_GC ||
