@@ -61,6 +61,9 @@
 #include <linux/debugobjects.h>
 #include <linux/lockdep.h>
 #include <linux/kmemleak.h>
+#ifdef CONFIG_MAPLE_TREE
+#include <linux/maple_tree.h>
+#endif
 #include <linux/pid_namespace.h>
 #include <linux/device.h>
 #include <linux/kthread.h>
@@ -547,6 +550,11 @@ static void __init mm_init(void)
 	/* page_owner must be initialized after buddy is ready */
 	page_ext_init_flatmem_late();
 	kmem_cache_init();
+#ifdef CONFIG_MAPLE_TREE
+	/* maple_node slab must exist before any mtree use (mm_struct
+	 * trees are initialised empty at mm creation time) */
+	maple_tree_init();
+#endif
 	pgtable_init();
 	vmalloc_init();
 	ioremap_huge_init();

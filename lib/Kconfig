@@ -406,6 +406,23 @@ config INTERVAL_TREE
 
 	  for more information.
 
+config MAPLE_TREE
+	bool "Maple tree"
+	help
+	  Maple tree is an RCU-safe adaptive B-tree for storing ranges.
+	  Backported from upstream v6.1 (Liam R. Howlett, Matthew Wilcox).
+	  On this 4.19 tree it coexists with the rbtree VMA implementation:
+	  each mm_struct carries an (initially empty) maple tree that the
+	  VMA migration can adopt incrementally. Select unless you know
+	  you do not want the maple tree library compiled in.
+
+config DEBUG_MAPLE_TREE
+	bool "Maple tree debugging and validation"
+	depends on MAPLE_TREE
+	help
+	  Enables mt_dump()/mt_validate() self-checks in the maple tree.
+	  Off by default; enable only when working on the tree itself.
+
 config XARRAY_MULTI
 	bool
 	help

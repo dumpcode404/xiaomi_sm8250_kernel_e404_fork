@@ -802,6 +802,22 @@ static inline bool xa_is_retry(const void *entry)
 	return unlikely(entry == XA_RETRY_ENTRY);
 }
 
+/*
+ * 4.19 backport: xa_is_advanced() first appeared upstream in v5.x.
+ * Upstream logic is "internal && entry <= XA_RETRY_ENTRY". This tree
+ * numbers its reserved entries differently from upstream v6.1
+ * (here XA_ZERO_ENTRY=256 < XA_RETRY_ENTRY=257, upstream has them
+ * swapped), so a verbatim copy would misclassify XA_ZERO_ENTRY as
+ * advanced. The exclusion below restores exact upstream semantics:
+ * every small reserved entry counts as advanced except the zero entry.
+ * Required by lib/maple_tree.c (mas state validation WARN_ONs).
+ */
+static inline bool xa_is_advanced(const void *entry)
+{
+	return xa_is_internal(entry) && (entry != XA_ZERO_ENTRY) &&
+		(entry <= XA_RETRY_ENTRY);
+}
+
 /**
  * typedef xa_update_node_t - A callback function from the XArray.
  * @node: The node which is being processed

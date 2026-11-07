@@ -9,6 +9,9 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/rbtree.h>
+#ifdef CONFIG_MAPLE_TREE
+#include <linux/maple_tree.h>
+#endif
 #include <linux/rwsem.h>
 #include <linux/completion.h>
 #include <linux/cpumask.h>
@@ -369,6 +372,14 @@ struct mm_struct {
 	struct {
 		struct vm_area_struct *mmap;		/* list of VMAs */
 		struct rb_root mm_rb;
+#ifdef CONFIG_MAPLE_TREE
+		/*
+		 * 4.19 backport coexistence tree. The rbtree/find_vma()
+		 * paths remain authoritative; mm_mt is maintained empty
+		 * until the VMA migration lands. See lib/maple_tree.c.
+		 */
+		struct maple_tree mm_mt;
+#endif
 		u64 vmacache_seqnum;                   /* per-thread vmacache */
 #ifdef CONFIG_MMU
 		unsigned long (*get_unmapped_area) (struct file *filp,
