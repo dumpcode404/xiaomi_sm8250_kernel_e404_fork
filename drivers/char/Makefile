@@ -3,7 +3,8 @@
 # Makefile for the kernel character device drivers.
 #
 
-obj-y				+= mem.o random.o
+obj-y				+= mem.o
+obj-$(CONFIG_RANDOM_DEFAULT_IMPL) += random.o
 obj-$(CONFIG_TTY_PRINTK)	+= ttyprintk.o
 obj-y				+= misc.o
 obj-$(CONFIG_ATARI_DSP56K)	+= dsp56k.o
@@ -77,3 +78,7 @@ obj-$(CONFIG_VSERVICES_SERIAL_SERVER)	+= vs_serial_server.o
 CFLAGS_vs_serial_server.o	+= -Werror
 obj-$(CONFIG_RB5_FAN_CONTROLLER)	+= rb5_fan.o
 obj-$(CONFIG_RB5_GPIOS_ENABLE)	+= rb5-gpios-enable.o
+
+# LRNG v57: entry point for drivers/char/lrng/ (hunk excluded from
+# upstream patch due to vendor-tree context, identical semantics)
+obj-$(CONFIG_LRNG)		+= lrng/
