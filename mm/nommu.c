@@ -657,9 +657,9 @@ static void put_nommu_region(struct vm_region *region)
  */
 static void add_vma_to_mm(struct mm_struct *mm, struct vm_area_struct *vma)
 {
-	struct vm_area_struct *pvma, *prev;
+	struct vm_area_struct *prev = NULL, *iter;
 	struct address_space *mapping;
-	struct rb_node **p, *parent, *rb_prev;
+	MA_STATE(mas, &mm->mm_mt, vma->vm_start, vma->vm_end - 1);
 
 	BUG_ON(!vma->vm_region);
 
@@ -677,43 +677,16 @@ static void add_vma_to_mm(struct mm_struct *mm, struct vm_area_struct *vma)
 		i_mmap_unlock_write(mapping);
 	}
 
-	/* add the VMA to the tree */
-	parent = rb_prev = NULL;
-	p = &mm->mm_rb.rb_node;
-	while (*p) {
-		parent = *p;
-		pvma = rb_entry(parent, struct vm_area_struct, vm_rb);
+	/* add the VMA to the list, sorted by start address */
+	for (iter = mm->mmap; iter && iter->vm_start < vma->vm_start;
+	     iter = iter->vm_next)
+		prev = iter;
 
-		/* sort by: start addr, end addr, VMA struct addr in that order
-		 * (the latter is necessary as we may get identical VMAs) */
-		if (vma->vm_start < pvma->vm_start)
-			p = &(*p)->rb_left;
-		else if (vma->vm_start > pvma->vm_start) {
-			rb_prev = parent;
-			p = &(*p)->rb_right;
-		} else if (vma->vm_end < pvma->vm_end)
-			p = &(*p)->rb_left;
-		else if (vma->vm_end > pvma->vm_end) {
-			rb_prev = parent;
-			p = &(*p)->rb_right;
-		} else if (vma < pvma)
-			p = &(*p)->rb_left;
-		else if (vma > pvma) {
-			rb_prev = parent;
-			p = &(*p)->rb_right;
-		} else
-			BUG();
-	}
+	__vma_link_list(mm, vma, prev);
 
-	rb_link_node(&vma->vm_rb, parent, p);
-	rb_insert_color(&vma->vm_rb, &mm->mm_rb);
-
-	/* add VMA to the VMA list also */
-	prev = NULL;
-	if (rb_prev)
-		prev = rb_entry(rb_prev, struct vm_area_struct, vm_rb);
-
-	__vma_link_list(mm, vma, prev, parent);
+	/* add the VMA to the maple tree */
+	if (mas_store_gfp(&mas, vma, GFP_KERNEL))
+		BUG();
 }
 
 /*
@@ -747,7 +720,10 @@ static void delete_vma_from_mm(struct vm_area_struct *vma)
 	}
 
 	/* remove from the MM's tree and list */
-	rb_erase(&vma->vm_rb, &mm->mm_rb);
+	{
+		MA_STATE(mas, &mm->mm_mt, vma->vm_start, vma->vm_start);
+		mas_erase(&mas);
+	}
 
 	if (vma->vm_prev)
 		vma->vm_prev->vm_next = vma->vm_next;
