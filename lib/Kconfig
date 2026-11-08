@@ -423,6 +423,16 @@ config DEBUG_MAPLE_TREE
 	  Enables mt_dump()/mt_validate() self-checks in the maple tree.
 	  Off by default; enable only when working on the tree itself.
 
+config MAPLE_TREE_SHADOW
+	bool "Maple tree shadow lookup verification"
+	depends on MAPLE_TREE
+	help
+	  TEMPORARY diagnostic: runs an mt_find() shadow lookup on every
+	  find_vma() and pr_err_ratelimited()s any divergence from the
+	  authoritative rbtree result. The rbtree result is always
+	  returned, so mismatches never affect behaviour. Remove before
+	  the Phase 3 lookup flip.
+
 config XARRAY_MULTI
 	bool
 	help

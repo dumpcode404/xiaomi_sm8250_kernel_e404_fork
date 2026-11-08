@@ -2330,6 +2330,33 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 
 EXPORT_SYMBOL(get_unmapped_area);
 
+#ifdef CONFIG_MAPLE_TREE_SHADOW
+/*
+ * TEMPORARY Phase 2.5 diagnostic: runs an mt_find() shadow lookup next
+ * to the authoritative rbtree lookup and reports any divergence. The
+ * rbtree result is always returned, so mismatches can never affect
+ * behaviour. mt_find() takes rcu_read_lock() internally, so this is
+ * safe in every find_vma() locking context.
+ */
+static inline void mt_shadow_check(struct mm_struct *mm, unsigned long addr,
+				   struct vm_area_struct *vma)
+{
+	unsigned long mt_index = addr;
+	struct vm_area_struct *mt_vma;
+
+	mt_vma = mt_find(&mm->mm_mt, &mt_index, ULONG_MAX);
+	if (unlikely(mt_vma != vma))
+		/* %px intentionally: pointer values must be comparable
+		 * across log lines for triage; %pK prints zeros under
+		 * kptr_restrict=2. Temporary diagnostic build only. */
+		pr_err_ratelimited("maple shadow mismatch: mm=%px addr=%lx rbtree=%px maple=%px comm=%.16s\n",
+				   mm, addr, vma, mt_vma, current->comm);
+}
+#else
+static inline void mt_shadow_check(struct mm_struct *mm, unsigned long addr,
+				   struct vm_area_struct *vma) { }
+#endif
+
 /* Look up the first VMA which satisfies  addr < vm_end,  NULL if none. */
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
@@ -2338,8 +2365,10 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 
 	/* Check the cache first. */
 	vma = vmacache_find(mm, addr);
-	if (likely(vma))
+	if (likely(vma)) {
+		mt_shadow_check(mm, addr, vma);
 		return vma;
+	}
 
 	rb_node = mm->mm_rb.rb_node;
 
@@ -2359,6 +2388,7 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 
 	if (vma)
 		vmacache_update(addr, vma);
+	mt_shadow_check(mm, addr, vma);
 	return vma;
 }
 
