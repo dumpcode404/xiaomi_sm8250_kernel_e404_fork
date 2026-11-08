@@ -556,7 +556,6 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		tmp->vm_prev = prev;
 		prev = tmp;
 
-		mm->highest_vm_end = vm_end_gap(tmp);
 
 		/* Dual-maintain mm_mt: index/last must be set explicitly
 		 * as the mas cursor is reused across loop iterations. */
@@ -987,7 +986,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	struct user_namespace *user_ns)
 {
 	mm->mmap = NULL;
-	mm->mm_rb = RB_ROOT;
+	mm->mm_rb = RB_ROOT; /* KABI dummy - keep empty, do not use */
 #ifdef CONFIG_MAPLE_TREE
 	mt_init(&mm->mm_mt);
 #endif

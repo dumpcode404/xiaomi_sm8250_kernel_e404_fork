@@ -290,14 +290,9 @@ struct vm_area_struct {
 	/* linked list of VM areas per task, sorted by address */
 	struct vm_area_struct *vm_next, *vm_prev;
 
+	/* KABI dummy padding - do not use. Preserves struct layout for
+	 * out-of-tree vendor modules after the rbtree removal. */
 	struct rb_node vm_rb;
-
-	/*
-	 * Largest free memory gap in bytes to the left of this VMA.
-	 * Either between this VMA and vma->vm_prev, or between one of the
-	 * VMAs below us in the VMA rbtree and its ->vm_prev. This helps
-	 * get_unmapped_area find a free area of the right size.
-	 */
 	unsigned long rb_subtree_gap;
 
 	/* Second cache line starts here. */
@@ -371,13 +366,10 @@ struct kioctx_table;
 struct mm_struct {
 	struct {
 		struct vm_area_struct *mmap;		/* list of VMAs */
+		/* KABI dummy padding - do not use. */
 		struct rb_root mm_rb;
 #ifdef CONFIG_MAPLE_TREE
-		/*
-		 * 4.19 backport coexistence tree. The rbtree/find_vma()
-		 * paths remain authoritative; mm_mt is maintained empty
-		 * until the VMA migration lands. See lib/maple_tree.c.
-		 */
+		/* Maple tree store for VMAs, keyed by address range. */
 		struct maple_tree mm_mt;
 #endif
 		u64 vmacache_seqnum;                   /* per-thread vmacache */
@@ -394,7 +386,6 @@ struct mm_struct {
 		unsigned long mmap_compat_legacy_base;
 #endif
 		unsigned long task_size;	/* size of task vm space */
-		unsigned long highest_vm_end;	/* highest vma end address */
 		pgd_t * pgd;
 
 		/**

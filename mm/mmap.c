@@ -267,10 +267,10 @@ static void validate_mm(struct mm_struct *mm)
 {
 	int bug = 0;
 	int i = 0;
-	unsigned long highest_address = 0;
-	struct vm_area_struct *vma = mm->mmap;
+	struct vm_area_struct *vma;
+	MA_STATE(mas, &mm->mm_mt, 0, 0);
 
-	while (vma) {
+	mas_for_each(&mas, vma, ULONG_MAX) {
 		struct anon_vma *anon_vma = vma->anon_vma;
 		struct anon_vma_chain *avc;
 
@@ -281,17 +281,10 @@ static void validate_mm(struct mm_struct *mm)
 			anon_vma_unlock_read(anon_vma);
 		}
 
-		highest_address = vm_end_gap(vma);
-		vma = vma->vm_next;
 		i++;
 	}
 	if (i != mm->map_count) {
-		pr_emerg("map_count %d vm_next %d\n", mm->map_count, i);
-		bug = 1;
-	}
-	if (highest_address != mm->highest_vm_end) {
-		pr_emerg("mm->highest_vm_end %lx, found %lx\n",
-			  mm->highest_vm_end, highest_address);
+		pr_emerg("map_count %d maple %d\n", mm->map_count, i);
 		bug = 1;
 	}
 	VM_BUG_ON_MM(bug, mm);
@@ -468,13 +461,6 @@ static int vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	__vma_link(mm, vma, prev);
 	vma_mas_store(vma, &mas);
-	/* Temporary canary-v2: verify the maple store landed. */
-	{
-		unsigned long __idx = vma->vm_start;
-
-		WARN_ON_ONCE(mt_find(&mm->mm_mt, &__idx,
-				     vma->vm_end - 1) != vma);
-	}
 	__vma_link_file(vma);
 
 	if (mapping)
@@ -499,13 +485,6 @@ static void __insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma,
 		BUG();
 	__vma_link(mm, vma, prev);
 	vma_mas_store(vma, mas);
-	/* Temporary canary-v2: verify the maple store landed. */
-	{
-		unsigned long __idx = vma->vm_start;
-
-		WARN_ON_ONCE(mt_find(&mm->mm_mt, &__idx,
-				     vma->vm_end - 1) != vma);
-	}
 	mm->map_count++;
 }
 
@@ -563,7 +542,6 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	struct rb_root_cached *root = NULL;
 	struct anon_vma *anon_vma = NULL;
 	struct file *file = vma->vm_file;
-	bool end_changed = false;
 	long adjust_next = 0;
 	int remove_next = 0;
 	/* Dual-maintain mm_mt through in-place boundary changes. The
@@ -737,10 +715,8 @@ again:
 
 	if (start != vma->vm_start)
 		vma->vm_start = start;
-	if (end != vma->vm_end) {
+	if (end != vma->vm_end)
 		vma->vm_end = end;
-		end_changed = true;
-	}
 	vma->vm_pgoff = pgoff;
 	if (adjust_next) {
 		next->vm_start += adjust_next << PAGE_SHIFT;
@@ -789,9 +765,6 @@ again:
 			insert_prev = vma->vm_prev;
 		}
 		__insert_vm_struct(mm, insert, &mas_insert, insert_prev);
-	} else {
-		if (end_changed && !next)
-			mm->highest_vm_end = vm_end_gap(vma);
 	}
 
 	/*
@@ -874,13 +847,8 @@ again:
 			 *
 			 * We reach this only in the remove_next == 1
 			 * case if the "next" vma that was removed was
-			 * the highest vma of the mm. However in such
-			 * case next->vm_end == "end" and the extended
-			 * "vma" has vma->vm_end == next->vm_end so
-			 * mm->highest_vm_end doesn't need any update
-			 * in remove_next == 1 case.
+			 * the highest vma of the mm.
 			 */
-			VM_WARN_ON(mm->highest_vm_end != vm_end_gap(vma));
 		}
 	}
 	if (insert && file)
@@ -2131,8 +2099,6 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 				anon_vma_interval_tree_pre_update_vma(vma);
 				vma->vm_end = address;
 				anon_vma_interval_tree_post_update_vma(vma);
-				if (!vma->vm_next)
-					mm->highest_vm_end = vm_end_gap(vma);
 				spin_unlock(&mm->page_table_lock);
 				vma_mas_store(vma, &mas);
 
@@ -2380,8 +2346,6 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	*insertion_point = vma;
 	if (vma)
 		vma->vm_prev = prev;
-	else
-		mm->highest_vm_end = prev ? vm_end_gap(prev) : 0;
 	tail_vma->vm_next = NULL;
 
 	/* Kill the cache */
