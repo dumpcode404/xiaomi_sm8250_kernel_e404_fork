@@ -12,7 +12,6 @@
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/mm.h>
-#include <linux/vmacache.h>
 #include <linux/shm.h>
 #include <linux/mman.h>
 #include <linux/pagemap.h>
@@ -513,9 +512,6 @@ static __always_inline void __vma_unlink_common(struct mm_struct *mm,
 	}
 	if (next)
 		next->vm_prev = prev;
-
-	/* Kill the cache */
-	vmacache_invalidate(mm);
 }
 
 static inline void __vma_unlink_prev(struct mm_struct *mm,
@@ -2347,9 +2343,6 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (vma)
 		vma->vm_prev = prev;
 	tail_vma->vm_next = NULL;
-
-	/* Kill the cache */
-	vmacache_invalidate(mm);
 }
 
 /*

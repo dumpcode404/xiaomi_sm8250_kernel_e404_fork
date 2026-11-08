@@ -25,7 +25,8 @@
 #define ALLOC_SPLIT_PTLOCKS	(SPINLOCK_SIZE > BITS_PER_LONG/8)
 
 /*
- * The per task VMA cache array:
+ * KABI dummy padding - do not use. Preserves task_struct layout for
+ * out-of-tree vendor modules after the vmacache removal.
  */
 #define VMACACHE_BITS 2
 #define VMACACHE_SIZE (1U << VMACACHE_BITS)

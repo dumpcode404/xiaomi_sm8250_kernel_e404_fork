@@ -42,7 +42,6 @@
 #include <linux/hmm.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
-#include <linux/vmacache.h>
 #include <linux/nsproxy.h>
 #include <linux/capability.h>
 #include <linux/cpu.h>
@@ -1383,9 +1382,6 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	oldmm = current->mm;
 	if (!oldmm)
 		return 0;
-
-	/* initialize the new vmacache entries */
-	vmacache_flush(tsk);
 
 	if (clone_flags & CLONE_VM) {
 		mmget(oldmm);
