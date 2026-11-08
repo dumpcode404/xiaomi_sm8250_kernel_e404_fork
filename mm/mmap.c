@@ -2333,33 +2333,10 @@ EXPORT_SYMBOL(get_unmapped_area);
 /* Look up the first VMA which satisfies  addr < vm_end,  NULL if none. */
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
-	struct rb_node *rb_node;
-	struct vm_area_struct *vma;
+	unsigned long index = addr;
 
-	/* Check the cache first. */
-	vma = vmacache_find(mm, addr);
-	if (likely(vma))
-		return vma;
-
-	rb_node = mm->mm_rb.rb_node;
-
-	while (rb_node) {
-		struct vm_area_struct *tmp;
-
-		tmp = rb_entry(rb_node, struct vm_area_struct, vm_rb);
-
-		if (tmp->vm_end > addr) {
-			vma = tmp;
-			if (tmp->vm_start <= addr)
-				break;
-			rb_node = rb_node->rb_left;
-		} else
-			rb_node = rb_node->rb_right;
-	}
-
-	if (vma)
-		vmacache_update(addr, vma);
-	return vma;
+	lockdep_assert_held(&mm->mmap_sem);
+	return mt_find(&mm->mm_mt, &index, ULONG_MAX);
 }
 
 EXPORT_SYMBOL(find_vma);
@@ -2372,18 +2349,13 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
 			struct vm_area_struct **pprev)
 {
 	struct vm_area_struct *vma;
+	MA_STATE(mas, &mm->mm_mt, addr, addr);
 
-	vma = find_vma(mm, addr);
-	if (vma) {
-		*pprev = vma->vm_prev;
-	} else {
-		struct rb_node *rb_node = mm->mm_rb.rb_node;
-		*pprev = NULL;
-		while (rb_node) {
-			*pprev = rb_entry(rb_node, struct vm_area_struct, vm_rb);
-			rb_node = rb_node->rb_right;
-		}
-	}
+	lockdep_assert_held(&mm->mmap_sem);
+	vma = mas_walk(&mas);
+	*pprev = mas_prev(&mas, 0);
+	if (!vma)
+		vma = mas_next(&mas, ULONG_MAX);
 	return vma;
 }
 
