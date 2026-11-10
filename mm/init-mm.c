@@ -30,7 +30,7 @@ struct mm_struct init_mm = {
 #ifdef CONFIG_MAPLE_TREE
 	.mm_mt		= {
 		.ma_lock = __SPIN_LOCK_UNLOCKED(init_mm.mm_mt.ma_lock),
-		.ma_flags = 0,
+		.ma_flags = MT_FLAGS_ALLOC_RANGE,
 		.ma_root = NULL,
 	},
 #endif

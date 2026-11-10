@@ -987,7 +987,12 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->mmap = NULL;
 	mm->mm_rb = RB_ROOT; /* KABI dummy - keep empty, do not use */
 #ifdef CONFIG_MAPLE_TREE
-	mt_init(&mm->mm_mt);
+	/*
+	 * Gap tracking must be enabled: without MT_FLAGS_ALLOC_RANGE,
+	 * mas_update_gap() is a no-op (mt_is_alloc() false) and every
+	 * gap search on a populated tree fails with -ENOMEM.
+	 */
+	mt_init_flags(&mm->mm_mt, MT_FLAGS_ALLOC_RANGE);
 #endif
 	mm->vmacache_seqnum = 0;
 	atomic_set(&mm->mm_users, 1);
