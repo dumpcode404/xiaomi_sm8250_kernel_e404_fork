@@ -2666,6 +2666,19 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype,
 					&& current_order > order)
 			goto find_smallest;
 
+		/*
+		 * Manual 4.19 adaptation of mainline CMA-fallback limit:
+		 * costly high-order MOVABLE stealing from CMA fragments the
+		 * CMA region. Prefer the smallest CMA page instead of the
+		 * largest to leave large CMA buddies intact for genuine
+		 * MIGRATE_CMA users. struct page only, no folio change.
+		 */
+		if (fallback_mt == MIGRATE_CMA &&
+		    start_migratetype == MIGRATE_MOVABLE &&
+		    order > PAGE_ALLOC_COSTLY_ORDER &&
+		    current_order > order)
+			goto find_smallest;
+
 		goto do_steal;
 	}
 
