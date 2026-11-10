@@ -1550,6 +1550,20 @@ static inline void obj_class_get_and_lock(struct zs_pool *pool, unsigned long ha
 	spin_lock(&(*classp)->lock);
 	/* Re-read under class->lock: PFN is now stable vs migration. */
 	obj = handle_to_obj(handle);
+	/*
+	 * Manual 4.19 adaptation of mainline class-validation fix:
+	 * if the handle was recycled to a different class between the
+	 * lockless read and the locked re-read, hand the lock over to
+	 * the correct class. Uses struct page API only.
+	 */
+	if (pool->size_class[obj_to_class_idx(obj)] != *classp) {
+		struct size_class *new_class =
+			pool->size_class[obj_to_class_idx(obj)];
+		spin_unlock(&(*classp)->lock);
+		*classp = new_class;
+		spin_lock(&(*classp)->lock);
+		obj = handle_to_obj(handle);
+	}
 	obj_to_page(obj, &f_page);
 	*zspagep = get_zspage(f_page);
 	*objp = obj;
