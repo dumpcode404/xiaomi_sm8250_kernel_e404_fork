@@ -5922,6 +5922,15 @@ static inline bool compaction_ready(struct zone *zone, struct scan_control *sc)
 	unsigned long watermark;
 	enum compact_result suitable;
 
+	/*
+	 * Manual 4.19 adaptation: critical tasks (oom_score_adj <= -900)
+	 * already skip shrink_slab and direct-reclaim throttle. For
+	 * costly high-order, skip the prolonged reclaim buffer and go
+	 * straight to compaction to cut UI-jank latency.
+	 */
+	if (task_is_critical() && sc->order > PAGE_ALLOC_COSTLY_ORDER)
+		return true;
+
 	suitable = compaction_suitable(zone, sc->order, 0, sc->reclaim_idx);
 	if (suitable == COMPACT_SUCCESS)
 		/* Allocation should succeed already. Don't reclaim. */
