@@ -2548,7 +2548,7 @@ static inline bool kcompactd_work_requested(pg_data_t *pgdat)
 	return pgdat->kcompactd_max_order > 0 || kthread_should_stop();
 }
 
-static bool kcompactd_node_suitable(pg_data_t *pgdat)
+static bool __maybe_unused kcompactd_node_suitable(pg_data_t *pgdat)
 {
 	int zoneid;
 	struct zone *zone;
@@ -2664,9 +2664,14 @@ void wakeup_kcompactd(pg_data_t *pgdat, int order, int classzone_idx)
 	if (!wq_has_sleeper(&pgdat->kcompactd_wait))
 		return;
 
-	if (!kcompactd_node_suitable(pgdat))
-		return;
-
+	/*
+	 * Manual 4.19 adaptation of mainline kcompactd missed-wakeup fix:
+	 * do not drop the request when the node looks unsuitable right now.
+	 * max_order/classzone_idx are already recorded above; still wake
+	 * kcompactd and let it re-evaluate suitability per-zone in
+	 * kcompactd_do_work(). A spurious wakeup is harmless, a lost one
+	 * stalls high-order allocations until the next wakeup_kcompactd().
+	 */
 	trace_mm_compaction_wakeup_kcompactd(pgdat->node_id, order,
 							classzone_idx);
 	wake_up_interruptible(&pgdat->kcompactd_wait);
