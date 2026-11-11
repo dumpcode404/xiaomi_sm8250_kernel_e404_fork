@@ -1653,19 +1653,21 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
 	 * with a linear bounce buffer, so layout is known only after
 	 * the copy. Sharing the per-CPU local_copy across concurrent
 	 * readers would race for spanning objects, so shared readers
-	 * use this device-independent per-CPU bounce buffer instead
-	 * (pinned with preemption disabled, never allocated here): shared
-	 * readers never touch zstrm->local_copy or mutable ctx.
-	 * The buffer exists from module init, so there is no
-	 * allocation-failure fallback to EXCLUSIVE anymore.
+	 * use this device-independent per-CPU bounce buffer instead.
+	 * Shared readers never touch zstrm->local_copy or mutable ctx.
+	 *
+	 * The CPU is pinned with preemption disabled ONLY around the
+	 * bounce-buffer use (read_begin..read_end + decompress), which
+	 * is verified sleep-free. Stream acquisition MUST stay outside:
+	 * down_read()/mutex there sleep, and sleeping with preemption
+	 * disabled is a scheduling-while-atomic BUG.
 	 */
-	if (zcomp_shared_decomp(comp) && size && size <= PAGE_SIZE) {
-		tmp = (void *)get_cpu_var(zram_bounce_buffer);
-		if (tmp)
-			mode = ZCOMP_DSTRM_SHARED;
-	}
+	if (zcomp_shared_decomp(comp) && size && size <= PAGE_SIZE)
+		mode = ZCOMP_DSTRM_SHARED;
 
 	zstrm = zcomp_dstrm_get(comp, mode);
+	if (mode == ZCOMP_DSTRM_SHARED)
+		tmp = (void *)get_cpu_var(zram_bounce_buffer);
 	if (mode == ZCOMP_DSTRM_SHARED)
 		src = zs_obj_read_begin(zram->mem_pool, handle, size, tmp);
 	else
@@ -1675,9 +1677,9 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
 	ret = zcomp_decompress(comp, zstrm, src, size, dst);
 	kunmap_atomic(dst);
 	zs_obj_read_end(zram->mem_pool, handle, size, src);
-	zcomp_dstrm_put(comp, zstrm, mode);
 	if (mode == ZCOMP_DSTRM_SHARED)
 		put_cpu_var(zram_bounce_buffer);
+	zcomp_dstrm_put(comp, zstrm, mode);
 
 	return ret;
 }
