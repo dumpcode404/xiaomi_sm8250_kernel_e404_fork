@@ -197,7 +197,6 @@ static int zstd_create_dctx(struct zcomp_params *params, struct zcomp_ctx *ctx)
 	return 0;
 
 error:
-	zstd_release_params(params);
 	zstd_destroy_dctx(ctx);
 	return -EINVAL;
 }
