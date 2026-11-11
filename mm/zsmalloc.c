@@ -46,6 +46,7 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/sched/task_stack.h>
 #include <linux/sched.h>
 #include <linux/magic.h>
 #include <linux/bitops.h>
@@ -82,13 +83,14 @@
  */
 #define ZS_ALIGN		8
 
-#define ZS_HANDLE_SIZE (sizeof(unsigned long))
+#define ZS_HANDLE_SIZE sizeof(struct zs_handle *)
 
 /*
  * Object location (<PFN>, <obj_idx>) is encoded as
  * a single (unsigned long) handle value.
  *
- * Note that object index <obj_idx> starts from 0.
+ * Note that object index <obj_idx> starts from 0, and is encoded as
+ * <obj_idx> + 1 so that a valid encoded obj value is never 0.
  *
  * This is made more complicated by various memory models and PAE.
  */
@@ -130,10 +132,10 @@
  *                     |
  *                     +-- ZS_OBJ_PFN_SHIFT
  *
- * Encoding class_idx into obj lets zs_free() locate the size_class
- * without holding pool->lock; class_idx is invariant across page
- * migration (only PFN changes), so a lockless read of the obj value
- * always yields a valid class_idx.
+ * Encoding class_idx into obj lets zs_free() and zs_rebind_handle()
+ * locate the size_class without holding pool->lock; class_idx is
+ * invariant across page migration (only PFN changes), so a lockless
+ * read of the obj value always yields a valid class_idx.
  */
 #define ZS_OBJ_PFN_SHIFT	(BITS_PER_LONG - _PFN_BITS)
 
@@ -143,6 +145,7 @@
 #define MAGIC_VAL_BITS	8
 
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
 
 #define ZS_MAX_PAGES_PER_ZSPAGE	(_AC(CONFIG_ZSMALLOC_CHAIN_SIZE, UL))
 
@@ -198,9 +201,6 @@
 static_assert(ZS_OBJ_IDX_BITS >= ZS_PAGES_PER_ZSPAGE_BITS,
 	      "zsmalloc: ZS_MIN_ALLOC_SIZE would exceed ZS_MAX_ALLOC_SIZE");
 
-/* ZS_MIN_ALLOC_SIZE must be multiple of ZS_ALIGN */
-#define ZS_MIN_ALLOC_SIZE \
-	MAX(32, (ZS_MAX_PAGES_PER_ZSPAGE << PAGE_SHIFT >> ZS_OBJ_IDX_BITS))
 /* each chunk includes extra space to keep handle */
 #define ZS_MAX_ALLOC_SIZE	PAGE_SIZE
 
@@ -218,6 +218,11 @@ static_assert(ZS_OBJ_IDX_BITS >= ZS_PAGES_PER_ZSPAGE_BITS,
  *  (reason above)
  */
 #define ZS_SIZE_CLASS_DELTA	(PAGE_SIZE >> CLASS_BITS)
+#define _ZS_MIN_ALLOC_RAW \
+	DIV_ROUND_UP(ZS_MAX_PAGES_PER_ZSPAGE << PAGE_SHIFT, ZS_OBJ_IDX_MASK)
+#define ZS_MIN_ALLOC_SIZE \
+	MIN(ZS_MAX_ALLOC_SIZE, \
+	    MAX(32UL, ALIGN(_ZS_MIN_ALLOC_RAW, ZS_ALIGN)))
 #define ZS_SIZE_CLASSES	(DIV_ROUND_UP(ZS_MAX_ALLOC_SIZE - ZS_MIN_ALLOC_SIZE, \
 				      ZS_SIZE_CLASS_DELTA) + 1)
 
@@ -301,7 +306,6 @@ struct zs_pool {
 	const char *name;
 
 	struct size_class *size_class[ZS_SIZE_CLASSES];
-	struct kmem_cache *handle_cachep;
 	struct kmem_cache *zspage_cachep;
 
 	atomic_long_t pages_allocated;
@@ -455,45 +459,21 @@ static int create_cache(struct zs_pool *pool)
 {
 	char *name;
 
-	name = kasprintf(GFP_KERNEL, "zs_handle-%s", pool->name);
-	if (!name)
-		return -ENOMEM;
-	pool->handle_cachep = kmem_cache_create(name, ZS_HANDLE_SIZE,
-						0, 0, NULL);
-	kfree(name);
-	if (!pool->handle_cachep)
-		return -EINVAL;
-
 	name = kasprintf(GFP_KERNEL, "zspage-%s", pool->name);
 	if (!name)
 		return -ENOMEM;
 	pool->zspage_cachep = kmem_cache_create(name, sizeof(struct zspage),
 						0, 0, NULL);
 	kfree(name);
-	if (!pool->zspage_cachep) {
-		kmem_cache_destroy(pool->handle_cachep);
-		pool->handle_cachep = NULL;
+	if (!pool->zspage_cachep)
 		return -EINVAL;
-	}
 
 	return 0;
 }
 
 static void destroy_cache(struct zs_pool *pool)
 {
-	kmem_cache_destroy(pool->handle_cachep);
 	kmem_cache_destroy(pool->zspage_cachep);
-}
-
-static unsigned long cache_alloc_handle(struct zs_pool *pool, gfp_t gfp)
-{
-	return (unsigned long)kmem_cache_alloc(pool->handle_cachep,
-			gfp & ~(__GFP_HIGHMEM|__GFP_MOVABLE|__GFP_CMA));
-}
-
-static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
-{
-	kmem_cache_free(pool->handle_cachep, (void *)handle);
 }
 
 static struct zspage *cache_alloc_zspage(struct zs_pool *pool, gfp_t flags)
@@ -508,12 +488,20 @@ static void cache_free_zspage(struct zs_pool *pool, struct zspage *zspage)
 }
 
 /*
- * Pairs with READ_ONCE() in handle_to_obj(): zs_free() may read the
- * handle locklessly, so prevent store tearing here.
+ * Pairs with READ_ONCE() in handle_to_obj() and zs_handle_is_allocated():
+ * zs_free(), zs_rebind_handle(), and zs_handle_is_allocated() may read
+ * the handle locklessly, so prevent store tearing here.
  */
-static void record_obj(unsigned long handle, unsigned long obj)
+static void record_obj(struct zs_handle *handle, unsigned long obj)
 {
-	WRITE_ONCE(*(unsigned long *)handle, obj);
+	WRITE_ONCE(ACCESS_PRIVATE(handle, obj), obj);
+}
+
+static bool valid_unallocated_handle(const struct zs_handle *handle)
+{
+	return IS_ALIGNED((unsigned long)handle, __alignof__(unsigned long)) &&
+	       !object_is_on_stack(handle) &&
+	       !zs_handle_is_allocated(handle);
 }
 
 /* zpool driver */
@@ -538,33 +526,34 @@ static void zs_zpool_destroy(void *pool)
 static int zs_zpool_malloc(void *pool, size_t size, gfp_t gfp,
 			unsigned long *handle)
 {
-	*handle = zs_malloc(pool, size, gfp);
+	struct zs_handle *zh = zs_malloc(pool, size, gfp);
 
-	if (IS_ERR_VALUE(*handle))
-		return PTR_ERR((void *)*handle);
+	if (IS_ERR(zh))
+		return PTR_ERR(zh);
+	*handle = (unsigned long)zh;
 	return 0;
 }
 static void zs_zpool_free(void *pool, unsigned long handle)
 {
-	zs_free(pool, handle);
+	zs_free(pool, (struct zs_handle *)handle);
 }
 
 static void *zs_zpool_obj_read_begin(void *pool, unsigned long handle,
 				     void *local_copy)
 {
-	return zs_obj_read_begin(pool, handle, local_copy);
+	return zs_obj_read_begin(pool, (struct zs_handle *)handle, local_copy);
 }
 
 static void zs_zpool_obj_read_end(void *pool, unsigned long handle,
 				  void *handle_mem)
 {
-	zs_obj_read_end(pool, handle, handle_mem);
+	zs_obj_read_end(pool, (struct zs_handle *)handle, handle_mem);
 }
 
 static void zs_zpool_obj_write(void *pool, unsigned long handle,
 			       void *handle_mem, size_t mem_len)
 {
-	zs_obj_write(pool, handle, handle_mem, mem_len);
+	zs_obj_write(pool, (struct zs_handle *)handle, handle_mem, mem_len);
 }
 
 static u64 zs_zpool_total_size(void *pool)
@@ -905,8 +894,10 @@ static struct page *get_next_page(struct page *page)
 static void obj_to_location(unsigned long obj, struct page **page,
 				unsigned int *obj_idx)
 {
+	VM_WARN_ON_ONCE(!(obj & ZS_OBJ_IDX_MASK));
+
 	*page = pfn_to_page(obj >> ZS_OBJ_PFN_SHIFT);
-	*obj_idx = (obj & ZS_OBJ_IDX_MASK);
+	*obj_idx = (obj & ZS_OBJ_IDX_MASK) - 1;
 }
 
 static void obj_to_page(unsigned long obj, struct page **page)
@@ -925,20 +916,21 @@ static unsigned long location_to_obj(struct page *page, unsigned int obj_idx,
 {
 	unsigned long obj;
 
+	VM_WARN_ON_ONCE(obj_idx + 1 > ZS_OBJ_IDX_MASK);
+
 	obj = page_to_pfn(page) << ZS_OBJ_PFN_SHIFT;
 	obj |= (unsigned long)(class_idx & ZS_OBJ_CLASS_MASK) << ZS_OBJ_IDX_BITS;
-	obj |= obj_idx & ZS_OBJ_IDX_MASK;
+	obj |= (obj_idx + 1) & ZS_OBJ_IDX_MASK;
 
 	return obj;
 }
 
-static unsigned long handle_to_obj(unsigned long handle)
+static unsigned long handle_to_obj(const struct zs_handle *handle)
 {
-	return READ_ONCE(*(unsigned long *)handle);
+	return READ_ONCE(ACCESS_PRIVATE(handle, obj));
 }
 
-static inline bool obj_allocated(struct page *page, void *obj,
-				 unsigned long *phandle)
+static inline struct zs_handle *obj_allocated(struct page *page, void *obj)
 {
 	unsigned long handle;
 	struct zspage *zspage = get_zspage(page);
@@ -950,11 +942,10 @@ static inline bool obj_allocated(struct page *page, void *obj,
 		handle = *(unsigned long *)obj;
 
 	if (!(handle & OBJ_ALLOCATED_TAG))
-		return false;
+		return NULL;
 
 	/* Clear all tags before returning the handle */
-	*phandle = handle & ~OBJ_TAG_MASK;
-	return true;
+	return (struct zs_handle *)(handle & ~OBJ_TAG_MASK);
 }
 
 static void reset_page(struct page *page)
@@ -1237,7 +1228,7 @@ unsigned long zs_get_total_pages(struct zs_pool *pool)
 }
 EXPORT_SYMBOL_GPL(zs_get_total_pages);
 
-void *zs_obj_read_begin(struct zs_pool *pool, unsigned long handle,
+void *zs_obj_read_begin(struct zs_pool *pool, const struct zs_handle *handle,
 			size_t mem_len, void *local_copy)
 {
 	struct zspage *zspage;
@@ -1287,7 +1278,7 @@ void *zs_obj_read_begin(struct zs_pool *pool, unsigned long handle,
 }
 EXPORT_SYMBOL_GPL(zs_obj_read_begin);
 
-void zs_obj_read_end(struct zs_pool *pool, unsigned long handle,
+void zs_obj_read_end(struct zs_pool *pool, const struct zs_handle *handle,
 		     size_t mem_len, void *handle_mem)
 {
 	struct zspage *zspage;
@@ -1314,53 +1305,37 @@ void zs_obj_read_end(struct zs_pool *pool, unsigned long handle,
 }
 EXPORT_SYMBOL_GPL(zs_obj_read_end);
 
-void zs_obj_write(struct zs_pool *pool, unsigned long handle,
-		  void *handle_mem, size_t mem_len)
+static void obj_write(struct size_class *class, struct zspage *zspage,
+		      unsigned long obj, const void *src, size_t size)
 {
-	struct zspage *zspage;
 	struct page *page;
-	unsigned long obj, off;
+	unsigned long off;
 	unsigned int obj_idx;
-	struct size_class *class;
 
-	/* Guarantee we can get zspage from handle safely */
-	read_lock(&pool->lock);
-	obj = handle_to_obj(handle);
 	obj_to_location(obj, &page, &obj_idx);
-	zspage = get_zspage(page);
-
-	/* Make sure migration doesn't move any pages in this zspage */
-	zspage_read_lock(zspage);
-	read_unlock(&pool->lock);
-
-	class = zspage_class(pool, zspage);
 	off = offset_in_page(class->size * obj_idx);
 
 	if (!ZsHugePage(zspage))
 		off += ZS_HANDLE_SIZE;
 
-	if (off + mem_len <= PAGE_SIZE) {
+	if (off + size <= PAGE_SIZE) {
 		/* this object is contained entirely within a page */
 		void *dst = kmap_atomic(page);
 
-		memcpy(dst + off, handle_mem, mem_len);
+		memcpy(dst + off, src, size);
 		kunmap_atomic(dst);
 	} else {
 		/* this object spans two pages */
 		size_t sizes[2];
 
 		sizes[0] = PAGE_SIZE - off;
-		sizes[1] = mem_len - sizes[0];
+		sizes[1] = size - sizes[0];
 
-		memcpy_to_page(page, off,
-			       handle_mem, sizes[0]);
+		memcpy_to_page(page, off, src, sizes[0]);
 		memcpy_to_page(get_next_page(page), 0,
-			       handle_mem + sizes[0], sizes[1]);
+			        src + sizes[0], sizes[1]);
 	}
-
-	zspage_read_unlock(zspage);
 }
-EXPORT_SYMBOL_GPL(zs_obj_write);
 
 /**
  * zs_huge_class_size() - Returns the size (in bytes) of the first huge
@@ -1382,7 +1357,7 @@ size_t zs_huge_class_size(struct zs_pool *pool)
 EXPORT_SYMBOL_GPL(zs_huge_class_size);
 
 static unsigned long obj_malloc(struct zs_pool *pool,
-				struct zspage *zspage, unsigned long handle)
+				struct zspage *zspage, struct zs_handle *handle)
 {
 	int i, nr_page, offset;
 	unsigned long obj;
@@ -1409,10 +1384,11 @@ static unsigned long obj_malloc(struct zs_pool *pool,
 	set_freeobj(zspage, link->next >> OBJ_TAG_BITS);
 	if (likely(!ZsHugePage(zspage)))
 		/* record handle in the header of allocated chunk */
-		link->handle = handle | OBJ_ALLOCATED_TAG;
+		link->handle = (unsigned long)handle | OBJ_ALLOCATED_TAG;
 	else
 		/* record handle to page->index */
-		zspage->first_page->index = handle | OBJ_ALLOCATED_TAG;
+		zspage->first_page->index =
+			(unsigned long)handle | OBJ_ALLOCATED_TAG;
 
 	kunmap_atomic(vaddr);
 	mod_zspage_inuse(zspage, 1);
@@ -1425,31 +1401,37 @@ static unsigned long obj_malloc(struct zs_pool *pool,
 
 
 /**
- * zs_malloc - Allocate block of given size from pool.
+ * zs_store() - Allocate block of given size from pool and copy data into it.
  * @pool: pool to allocate from
+ * @handle: handle to store allocated object in
+ * @src: data to copy into the allocated object
  * @size: size of block to allocate
  * @gfp: gfp flags when allocating object
  *
- * On success, handle to the allocated object is returned,
- * otherwise an ERR_PTR().
  * Allocation requests with size > ZS_MAX_ALLOC_SIZE will fail.
+ * zsmalloc keeps a back-pointer to @handle and updates it asynchronously
+ * when the object moves, so @handle must be unsigned-long aligned, must
+ * not be on the stack or modified/copied by the caller, and must remain
+ * allocated until zs_free() or zs_rebind_handle().
+ *
+ * Return: 0 on success, negative error code otherwise.
  */
-unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
+int zs_store(struct zs_pool *pool, struct zs_handle *handle, const void *src,
+	     size_t size, gfp_t gfp)
 {
-	unsigned long handle;
 	struct size_class *class;
+	unsigned long obj;
 	int newfg;
 	struct zspage *zspage;
 
+	if (WARN_ON_ONCE(!valid_unallocated_handle(handle)))
+		return -EINVAL;
+
 	if (unlikely(!size))
-		return (unsigned long)ERR_PTR(-EINVAL);
+		return -EINVAL;
 
 	if (unlikely(size > ZS_MAX_ALLOC_SIZE))
-		return (unsigned long)ERR_PTR(-ENOSPC);
-
-	handle = cache_alloc_handle(pool, gfp);
-	if (!handle)
-		return (unsigned long)ERR_PTR(-ENOMEM);
+		return -ENOSPC;
 
 	class = lookup_size_class(pool, size);
 
@@ -1457,24 +1439,33 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 	spin_lock(&class->lock);
 	zspage = find_get_zspage(class);
 	if (likely(zspage)) {
-		obj_malloc(pool, zspage, handle);
+		obj = obj_malloc(pool, zspage, handle);
 		/* Now move the zspage to another fullness group, if required */
 		fix_fullness_group(class, zspage);
 		class_stat_add(class, ZS_OBJS_INUSE, 1);
+		zspage_read_lock(zspage);
+		spin_unlock(&class->lock);
 
-		goto out;
+		obj_write(class, zspage, obj, src, size);
+		zspage_read_unlock(zspage);
+		return 0;
 	}
 
 	spin_unlock(&class->lock);
 
 	zspage = alloc_zspage(pool, class, gfp);
-	if (!zspage) {
-		cache_free_handle(pool, handle);
-		return (unsigned long)ERR_PTR(-ENOMEM);
-	}
+	if (unlikely(!zspage))
+		return -ENOMEM;
+
+	/*
+	 * New zspage is not in class->fullness_list or movable yet, so we
+	 * can allocate the object and copy data before taking class->lock
+	 * and without zspage_read_lock().
+	 */
+	obj = obj_malloc(pool, zspage, handle);
+	obj_write(class, zspage, obj, src, size);
 
 	spin_lock(&class->lock);
-	obj_malloc(pool, zspage, handle);
 	newfg = get_fullness_group(class, zspage);
 	insert_zspage(class, zspage, newfg);
 	atomic_long_add(class->pages_per_zspage, &pool->pages_allocated);
@@ -1483,12 +1474,11 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 
 	/* We completely set up zspage so mark them as movable */
 	SetZsPageMovable(pool, zspage);
-out:
 	spin_unlock(&class->lock);
 
-	return handle;
+	return 0;
 }
-EXPORT_SYMBOL_GPL(zs_malloc);
+EXPORT_SYMBOL_GPL(zs_store);
 
 static void obj_free(int class_size, unsigned long obj)
 {
@@ -1537,9 +1527,11 @@ static unsigned int obj_to_class_idx(unsigned long obj)
  * encoding is disabled), fall back to pool->lock for the lookup.
  */
 #if ZS_OBJ_CLASS_BITS > 0
-static inline void obj_class_get_and_lock(struct zs_pool *pool, unsigned long handle,
-					 unsigned long *objp, struct zspage **zspagep,
-					 struct size_class **classp)
+static inline void obj_class_get_and_lock(struct zs_pool *pool,
+					  const struct zs_handle *handle,
+					  unsigned long *objp,
+					  struct zspage **zspagep,
+					  struct size_class **classp)
 	__acquires(&(*classp)->lock)
 {
 	struct page *f_page;
@@ -1569,9 +1561,11 @@ static inline void obj_class_get_and_lock(struct zs_pool *pool, unsigned long ha
 	*objp = obj;
 }
 #else
-static inline void obj_class_get_and_lock(struct zs_pool *pool, unsigned long handle,
-					 unsigned long *objp, struct zspage **zspagep,
-					 struct size_class **classp)
+static inline void obj_class_get_and_lock(struct zs_pool *pool,
+					  const struct zs_handle *handle,
+					  unsigned long *objp,
+					  struct zspage **zspagep,
+					  struct size_class **classp)
 	__acquires(&(*classp)->lock)
 {
 	struct page *f_page;
@@ -1588,7 +1582,7 @@ static inline void obj_class_get_and_lock(struct zs_pool *pool, unsigned long ha
 }
 #endif
 
-void zs_free(struct zs_pool *pool, unsigned long handle)
+void zs_free(struct zs_pool *pool, struct zs_handle *handle)
 {
 	struct zspage *zspage;
 	unsigned long obj;
@@ -1596,13 +1590,14 @@ void zs_free(struct zs_pool *pool, unsigned long handle)
 	int fullness;
 	struct zspage *zspage_to_free = NULL;
 
-	if (IS_ERR_OR_NULL((void *)handle))
+	if (!zs_handle_is_allocated(handle))
 		return;
 
 	obj_class_get_and_lock(pool, handle, &obj, &zspage, &class);
 
 	class_stat_sub(class, ZS_OBJS_INUSE, 1);
 	obj_free(class->size, obj);
+	record_obj(handle, 0);
 
 	fullness = fix_fullness_group(class, zspage);
 	if (fullness == ZS_INUSE_RATIO_0) {
@@ -1622,9 +1617,54 @@ void zs_free(struct zs_pool *pool, unsigned long handle)
 		__free_zspage_lockless(pool, zspage_to_free);
 		atomic_long_sub(class->pages_per_zspage, &pool->pages_allocated);
 	}
-	cache_free_handle(pool, handle);
 }
 EXPORT_SYMBOL_GPL(zs_free);
+
+/**
+ * zs_rebind_handle() - Rebind an allocated object to a new handle.
+ * @pool: pool the object belongs to
+ * @dst: unallocated destination handle (must not be on the stack)
+ * @src: source handle that currently owns the object
+ *
+ * Rebinds the object from @src to @dst, updating the object header so
+ * compaction and page migration update @dst instead of @src, and resets
+ * @src.
+ */
+void zs_rebind_handle(struct zs_pool *pool, struct zs_handle *dst,
+		      struct zs_handle *src)
+{
+	struct size_class *class;
+	struct zspage *zspage;
+	struct page *f_page;
+	struct link_free *link;
+	unsigned int obj_idx;
+	unsigned long obj;
+	unsigned long off;
+	void *vaddr;
+
+	if (WARN_ON_ONCE(!valid_unallocated_handle(dst) ||
+			 !zs_handle_is_allocated(src)))
+		return;
+
+	obj_class_get_and_lock(pool, src, &obj, &zspage, &class);
+
+	if (likely(!ZsHugePage(zspage))) {
+		obj_to_location(obj, &f_page, &obj_idx);
+		off = offset_in_page(class->size * obj_idx);
+		vaddr = kmap_atomic(f_page);
+		link = (struct link_free *)(vaddr + off);
+		link->handle = (unsigned long)dst | OBJ_ALLOCATED_TAG;
+		kunmap_atomic(vaddr);
+	} else {
+		zspage->first_page->index =
+			(unsigned long)dst | OBJ_ALLOCATED_TAG;
+	}
+
+	record_obj(dst, obj);
+	record_obj(src, 0);
+	spin_unlock(&class->lock);
+}
+EXPORT_SYMBOL_GPL(zs_rebind_handle);
 
 static void zs_object_copy(struct size_class *class, unsigned long dst,
 				unsigned long src)
@@ -1700,19 +1740,20 @@ static void zs_object_copy(struct size_class *class, unsigned long dst,
  * Find alloced object in zspage from index object and
  * return handle.
  */
-static unsigned long find_alloced_obj(struct size_class *class,
-				      struct page *page, int *obj_idx)
+static struct zs_handle *find_alloced_obj(struct size_class *class,
+					  struct page *page, int *obj_idx)
 {
 	unsigned int offset;
 	int index = *obj_idx;
-	unsigned long handle = 0;
+	struct zs_handle *handle = NULL;
 	void *addr = kmap_atomic(page);
 
 	offset = get_first_obj_offset(page);
 	offset += class->size * index;
 
 	while (offset < PAGE_SIZE) {
-		if (obj_allocated(page, addr + offset, &handle))
+		handle = obj_allocated(page, addr + offset);
+		if (handle)
 			break;
 
 		offset += class->size;
@@ -1730,7 +1771,7 @@ static void migrate_zspage(struct zs_pool *pool, struct zspage *src_zspage,
 			   struct zspage *dst_zspage)
 {
 	unsigned long used_obj, free_obj;
-	unsigned long handle;
+	struct zs_handle *handle;
 	int obj_idx = 0;
 	struct page *s_page = get_first_page(src_zspage);
 	struct size_class *class = pool->size_class[src_zspage->class];
@@ -1928,7 +1969,7 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	struct page *dummy;
 	void *s_addr, *d_addr, *addr;
 	unsigned int offset;
-	unsigned long handle;
+	struct zs_handle *handle;
 	unsigned long old_obj, new_obj;
 	unsigned int obj_idx;
 
@@ -1946,7 +1987,8 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 
 	/*
 	 * The pool migrate_lock protects against races between zpage migration
-	 * and zs_free(), but only when ZS_OBJ_CLASS_BITS does not apply.
+	 * and zs_free() / zs_rebind_handle(), but only when ZS_OBJ_CLASS_BITS
+	 * does not apply.
 	 */
 	write_lock(&pool->lock);
 	zspage = get_zspage(page);
@@ -1956,7 +1998,10 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	 * the class lock protects zpage alloc/free in the zspage.
 	 */
 	spin_lock(&class->lock);
-	/* the zspage write_lock protects zpage access via zs_obj_read/write() */
+	/*
+	 * The zspage write_lock protects zpage access via zs_obj_read_begin/end()
+	 * and zs_store().
+	 */
 	if (!zspage_write_trylock(zspage)) {
 		spin_unlock(&class->lock);
 		write_unlock(&pool->lock);
@@ -1987,8 +2032,8 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 
 	for (addr = s_addr + offset; addr < s_addr + PAGE_SIZE;
 					addr += class->size) {
-		if (obj_allocated(page, addr, &handle)) {
-
+		handle = obj_allocated(page, addr);
+		if (handle) {
 			old_obj = handle_to_obj(handle);
 			obj_to_location(old_obj, &dummy, &obj_idx);
 			new_obj = (unsigned long)location_to_obj(newpage, obj_idx,
@@ -2135,9 +2180,9 @@ static unsigned long __zs_compact(struct zs_pool *pool,
 	unsigned long pages_freed = 0;
 
 	/*
-	 * Protect against races between zpage migration and zs_free()
-	 * (only when ZS_OBJ_CLASS_BITS does not apply), as well as
-	 * zpage allocation and free.
+	 * Protect against races between zpage migration and zs_free() /
+	 * zs_rebind_handle() (only when ZS_OBJ_CLASS_BITS does not apply),
+	 * as well as zpage allocation and free.
 	 */
 	write_lock(&pool->lock);
 	spin_lock(&class->lock);
@@ -2372,7 +2417,7 @@ struct zs_pool *zs_create_pool(const char *name)
 			huge_class_size = size;
 			/*
 			 * The object uses ZS_HANDLE_SIZE bytes to store the
-			 * handle. We need to subtract it, because zs_malloc()
+			 * handle. We need to subtract it, because zs_store()
 			 * unconditionally adds handle size before it performs
 			 * size class search - so object may be smaller than
 			 * huge class size, yet it still can end up in the huge
