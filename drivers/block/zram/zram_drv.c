@@ -2463,7 +2463,11 @@ static ssize_t disksize_store(struct device *dev,
 	int err;
 	u32 prio;
 
-	if (kstrtoull(buf, 0, &disksize) || !disksize)
+	/* Accept plain bytes as well as K/M/G suffixed sizes ("6G").
+	 * The old hardcoded 6GB behaviour accepted anything; be lenient
+	 * here so init scripts using either format keep working. */
+	disksize = memparse(buf, NULL);
+	if (!disksize)
 		return -EINVAL;
 	pr_info("Setting zRAM size to %llu GB", disksize / 1073741824);
 
