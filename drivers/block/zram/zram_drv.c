@@ -1785,16 +1785,15 @@ static int write_incompressible_page(struct zram *zram, struct page *page,
 	unsigned long handle;
 	void *src;
 
-	/*
-	 * This function is called from preemptible context so we don't need
-	 * to do optimistic and fallback to pessimistic handle allocation,
-	 * like we do for compressible pages.
-	 */
+	zram_slot_lock(zram, index);
+	zram_free_page(zram, index);
 	handle = zs_malloc(zram->mem_pool, PAGE_SIZE,
 			   GFP_NOIO | __GFP_NOWARN |
 			   __GFP_HIGHMEM | __GFP_MOVABLE);
-	if (IS_ERR_VALUE(handle))
+	if (IS_ERR_VALUE(handle)) {
+		zram_slot_unlock(zram, index);
 		return PTR_ERR((void *)handle);
+	}
 
 	update_used_max(zram);
 
@@ -1802,8 +1801,6 @@ static int write_incompressible_page(struct zram *zram, struct page *page,
 	zs_obj_write(zram->mem_pool, handle, src, PAGE_SIZE);
 	kunmap_atomic(src);
 
-	zram_slot_lock(zram, index);
-	zram_free_page(zram, index);
 	zram_set_flag(zram, index, ZRAM_HUGE);
 	zram_set_handle(zram, index, handle);
 	zram_set_obj_size(zram, index, PAGE_SIZE);
@@ -1853,11 +1850,14 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 		return write_incompressible_page(zram, page, index);
 	}
 
+	zram_slot_lock(zram, index);
+	zram_free_page(zram, index);
 	handle = zs_malloc(zram->mem_pool, comp_len,
 			   GFP_NOIO | __GFP_NOWARN |
 			   __GFP_HIGHMEM | __GFP_MOVABLE | __GFP_CMA);
 	if (IS_ERR_VALUE(handle)) {
 		zcomp_cstrm_put(zstrm);
+		zram_slot_unlock(zram, index);
 		return PTR_ERR((void *)handle);
 	}
 
@@ -1866,8 +1866,6 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	zs_obj_write(zram->mem_pool, handle, zstrm->buffer, comp_len);
 	zcomp_cstrm_put(zstrm);
 
-	zram_slot_lock(zram, index);
-	zram_free_page(zram, index);
 	zram_set_handle(zram, index, handle);
 	zram_set_obj_size(zram, index, comp_len);
 	zram_slot_unlock(zram, index);
