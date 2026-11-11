@@ -65,7 +65,7 @@ enum zram_pageflags {
  */
 struct zram_table_entry {
 	union {
-		struct zs_handle *handle;
+		struct zs_handle handle;
 		unsigned long element;
 		unsigned long blk_idx;
 	};
@@ -138,6 +138,9 @@ struct zram {
 	unsigned long *bitmap;
 	unsigned long nr_pages;
 #endif
+	/* Scratch handle for recompression; kept outside MULTI_COMP
+	 * because this tree runs recompression on the primary comp. */
+	struct zs_handle recomp_handle;
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
