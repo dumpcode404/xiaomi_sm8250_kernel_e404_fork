@@ -25,6 +25,10 @@
 
 #define ZSTD_DEF_LEVEL	1
 
+/* NOTE: one stateful cctx/dctx per tfm, no locking (same as crypto/lz4.c).
+ * Concurrent crypto_comp_(de)compress on the SAME tfm is NOT safe;
+ * in-tree users are per-CPU tfms (zswap) or per-stream ctx (zram).
+ * A future shared-tfm caller must serialize externally. */
 struct zstd_ctx {
 	zstd_cctx *cctx;
 	zstd_dctx *dctx;
