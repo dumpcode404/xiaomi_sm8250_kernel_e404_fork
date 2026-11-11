@@ -32,6 +32,7 @@
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
+#include <linux/percpu.h>
 
 #include "zram_drv.h"
 
@@ -51,6 +52,30 @@ static unsigned int num_devices = 1;
  * uncompressed in memory.
  */
 static size_t huge_class_size;
+
+/*
+ * Shared-read bounce buffers: one PAGE_SIZE buffer per possible CPU,
+ * allocated once at module init, never in the hot path. A shared reader
+ * pins its CPU with get_cpu_ptr() across zs_obj_read_begin..read_end +
+ * decompress; preemption must stay disabled for the whole window or a
+ * second reader on the same CPU would overwrite the buffer mid-use.
+ * Nothing in that window may sleep: rwlock/spinlocks + kmap_atomic +
+ * pure-compute backends only (zcomp_decompress()'s might_sleep() is a
+ * no-op here but remains a tripwire on debug kernels). 8 x 4K = 32K.
+ */
+/* Stored as unsigned long: per-CPU pointer vars trip clang's
+ * typeof() handling, a plain scalar per-CPU slot does not. */
+static DEFINE_PER_CPU(unsigned long, zram_bounce_buffer);
+
+static void free_zram_bounce_buffers(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		kfree((void *)per_cpu(zram_bounce_buffer, cpu));
+		per_cpu(zram_bounce_buffer, cpu) = 0;
+	}
+}
 
 static const struct block_device_operations zram_devops;
 
@@ -1635,16 +1660,16 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
 	 * upstream uses sg_is_last() after zs_obj_read_sg_begin() to
 	 * decide shared vs exclusive. 4.19 uses zs_obj_read_begin()
 	 * with a linear bounce buffer, so layout is known only after
-	 * the copy into local_copy. Sharing that per-CPU local_copy
-	 * across concurrent readers would race for spanning objects.
-	 * Use a per-request bounce buffer for stateless backends
-	 * (minimal part of upstream patch 13, required for correctness
-	 * here, not just performance): shared readers never touch
-	 * zstrm->local_copy or mutable ctx. Fall back to exclusive on
-	 * allocation failure.
+	 * the copy. Sharing the per-CPU local_copy across concurrent
+	 * readers would race for spanning objects, so shared readers
+	 * use this device-independent per-CPU bounce buffer instead
+	 * (pinned with preemption disabled, never allocated here): shared
+	 * readers never touch zstrm->local_copy or mutable ctx.
+	 * The buffer exists from module init, so there is no
+	 * allocation-failure fallback to EXCLUSIVE anymore.
 	 */
 	if (zcomp_shared_decomp(comp) && size && size <= PAGE_SIZE) {
-		tmp = kmalloc(size, GFP_NOWAIT | __GFP_NOWARN);
+		tmp = (void *)get_cpu_var(zram_bounce_buffer);
 		if (tmp)
 			mode = ZCOMP_DSTRM_SHARED;
 	}
@@ -1660,7 +1685,8 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
 	kunmap_atomic(dst);
 	zs_obj_read_end(zram->mem_pool, handle, size, src);
 	zcomp_dstrm_put(comp, zstrm, mode);
-	kfree(tmp);
+	if (mode == ZCOMP_DSTRM_SHARED)
+		put_cpu_var(zram_bounce_buffer);
 
 	return ret;
 }
@@ -2848,15 +2874,33 @@ static int __init zram_init(void)
 
 	BUILD_BUG_ON(__NR_ZRAM_PAGEFLAGS > sizeof(zram_te.flags) * 8);
 
+	/* Bounce buffers for shared reads; fail probe if unavailable. */
+	{
+		int cpu;
+
+		for_each_possible_cpu(cpu) {
+			void *buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+
+			if (!buf) {
+				free_zram_bounce_buffers();
+				return -ENOMEM;
+			}
+			per_cpu(zram_bounce_buffer, cpu) = (unsigned long)buf;
+		}
+	}
+
 	ret = cpuhp_setup_state_multi(CPUHP_ZCOMP_PREPARE, "block/zram:prepare",
 				      zcomp_cpu_up_prepare, zcomp_cpu_dead);
-	if (ret < 0)
+	if (ret < 0) {
+		free_zram_bounce_buffers();
 		return ret;
+	}
 
 	ret = class_register(&zram_control_class);
 	if (ret) {
 		pr_err("Unable to register zram-control class\n");
 		cpuhp_remove_multi_state(CPUHP_ZCOMP_PREPARE);
+		free_zram_bounce_buffers();
 		return ret;
 	}
 
@@ -2866,6 +2910,7 @@ static int __init zram_init(void)
 		pr_err("Unable to get major number\n");
 		class_unregister(&zram_control_class);
 		cpuhp_remove_multi_state(CPUHP_ZCOMP_PREPARE);
+		free_zram_bounce_buffers();
 		return -EBUSY;
 	}
 
@@ -2882,12 +2927,14 @@ static int __init zram_init(void)
 
 out_error:
 	destroy_devices();
+	free_zram_bounce_buffers();
 	return ret;
 }
 
 static void __exit zram_exit(void)
 {
 	destroy_devices();
+	free_zram_bounce_buffers();
 }
 
 module_init(zram_init);
