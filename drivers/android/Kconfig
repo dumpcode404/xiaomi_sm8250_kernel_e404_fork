@@ -86,7 +86,7 @@ config ANDROID_BINDER_LOGS
 
 config ANDROID_SIMPLE_LMK
 	bool "Simple Android Low Memory Killer"
-	depends on !ANDROID_LOW_MEMORY_KILLER && !MEMCG && !PSI
+	depends on !ANDROID_LOW_MEMORY_KILLER
 	---help---
 	  This is a complete low memory killer solution for Android that is
 	  small and simple. Processes are killed according to the priorities
@@ -94,6 +94,10 @@ config ANDROID_SIMPLE_LMK
 	  always killed first. Processes are killed until memory deficits are
 	  satisfied when direct reclaim or kswapd repeatedly struggle to free
 	  up pages.
+	  Unlike the classic lowmemorykiller, this works alongside MEMCG,
+	  PSI and MGLRU: it only looks at global reclaim distress
+	  (si_mem_available + shrink priority) and never touches
+	  per-memcg accounting.
 
 if ANDROID_SIMPLE_LMK
 
