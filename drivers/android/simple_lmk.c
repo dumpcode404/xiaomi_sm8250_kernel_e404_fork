@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) "simple_lmk: " fmt
 
 #include <linux/freezer.h>
+#include <linux/init.h>
 #include <linux/jiffies.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
@@ -13,6 +14,7 @@
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
 #include <linux/sort.h>
+#include <linux/swap.h>
 #include <uapi/linux/sched/types.h>
 
 /* The minimum number of pages to free per reclaim */
@@ -24,11 +26,16 @@
 /* Quiet period between order-0 reclaim passes; bypassed when critical */
 #define RECLAIM_COOLDOWN msecs_to_jiffies(CONFIG_ANDROID_SIMPLE_LMK_COOLDOWN_MSEC)
 
-/* Normal passes only target cached/empty tiers; lower adjs are last resort */
-#define PROTECT_ADJ 100
+/* Normal passes only target cached/empty tiers (adj >= 900);
+ * anything in use (foreground/visible/perceptible/services)
+ * is off-limits unless memory is critical. */
+#define PROTECT_ADJ 900
 
 /* Kill up to this many victims per reclaim */
 #define MAX_VICTIMS 1024
+
+/* Max consecutive passes deferred to swap before killing anyway */
+#define SWAP_DEFER_MAX 3
 
 /* Timeout in jiffies for each reclaim */
 #define RECLAIM_EXPIRES msecs_to_jiffies(CONFIG_ANDROID_SIMPLE_LMK_TIMEOUT_MSEC)
@@ -53,9 +60,12 @@ static atomic_t nr_killed = ATOMIC_INIT(0);
 /* Lockless hints latched from the reclaim path for the killer thread */
 static atomic_t hint_order = ATOMIC_INIT(0);
 static atomic_t hint_direct = ATOMIC_INIT(0);
+static atomic_t init_done = ATOMIC_INIT(0);
 static unsigned long last_kill_jiffies;
 static int suppressed_streak;
 static int episode_kills;
+/* Consecutive passes where killing was deferred to swap instead */
+static int swap_defer_streak;
 
 static int victim_cmp(const void *lhs_ptr, const void *rhs_ptr)
 {
@@ -410,7 +420,28 @@ static int simple_lmk_reclaim_thread(void *data)
 
 		target = kill_target(avail, total);
 		floor = PROTECT_ADJ;
-		if (critical || order > PAGE_ALLOC_COSTLY_ORDER || episode_kills) {
+
+		/*
+		 * Swap-aware deferral: if zram/swap still has room for the
+		 * whole shortfall and we are not critical, let kswapd swap
+		 * pages out instead of killing. Capped so a full swap, a
+		 * swapin storm, or unswappable pressure still falls
+		 * through to killing instead of livelocking.
+		 */
+		if (!critical && swap_defer_streak < SWAP_DEFER_MAX &&
+		    get_nr_swap_pages() > target) {
+			swap_defer_streak++;
+			continue;
+		}
+		swap_defer_streak = 0;
+
+		/*
+		 * Escalate below PROTECT_ADJ only when truly critical.
+		 * Costly-order and repeat-episode pressure is handled by
+		 * the normal cached-tier kills; dropping the floor to 0
+		 * on those would kill in-use (adj < 100) processes.
+		 */
+		if (critical) {
 			pr_info_ratelimited("escalating below adj %d (critical=%d order=%d streak=%d)\n",
 					    PROTECT_ADJ, critical, order,
 					    episode_kills);
@@ -564,23 +595,40 @@ void simple_lmk_reclaim_needed(int order, bool direct)
 }
 EXPORT_SYMBOL_GPL(simple_lmk_reclaim_needed);
 
-/* Initialize Simple LMK when lmkd in Android writes to the minfree parameter */
-static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
+/* Start the reclaim and reaper threads exactly once, whether triggered
+ * by an lmkd minfree write or by the built-in late init below. */
+static int simple_lmk_start_threads(void)
 {
-	static atomic_t init_done = ATOMIC_INIT(0);
 	struct task_struct *thread;
 
-	if (!atomic_cmpxchg(&init_done, 0, 1)) {
-		thread = kthread_run(simple_lmk_reaper_thread, NULL,
-				     "simple_lmkd_reaper");
-		BUG_ON(IS_ERR(thread));
-		thread = kthread_run(simple_lmk_reclaim_thread, NULL,
-				     "simple_lmkd");
-		BUG_ON(IS_ERR(thread));
-	}
+	if (atomic_cmpxchg(&init_done, 0, 1))
+		return 0;
+
+	thread = kthread_run(simple_lmk_reaper_thread, NULL,
+			     "simple_lmkd_reaper");
+	BUG_ON(IS_ERR(thread));
+	thread = kthread_run(simple_lmk_reclaim_thread, NULL,
+			     "simple_lmkd");
+	BUG_ON(IS_ERR(thread));
 
 	return 0;
 }
+
+/* Initialize Simple LMK when lmkd in Android writes to the minfree parameter */
+static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
+{
+	return simple_lmk_start_threads();
+}
+
+/*
+ * Systems without a userspace lmkd never write minfree, which would
+ * leave SLMK dormant forever. Start it with Kconfig defaults instead.
+ */
+static int __init simple_lmk_late_init(void)
+{
+	return simple_lmk_start_threads();
+}
+late_initcall(simple_lmk_late_init);
 
 static const struct kernel_param_ops simple_lmk_init_ops = {
 	.set = simple_lmk_init_set
