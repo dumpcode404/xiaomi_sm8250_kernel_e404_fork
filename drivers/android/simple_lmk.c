@@ -26,8 +26,10 @@
 /* Quiet period between order-0 reclaim passes; bypassed when critical */
 #define RECLAIM_COOLDOWN msecs_to_jiffies(CONFIG_ANDROID_SIMPLE_LMK_COOLDOWN_MSEC)
 
-/* Normal passes only target cached/empty tiers; lower adjs are last resort */
-#define PROTECT_ADJ 100
+/* Normal passes only target cached/empty tiers (adj >= 900);
+ * anything in use (foreground/visible/perceptible/services)
+ * is off-limits unless memory is critical. */
+#define PROTECT_ADJ 900
 
 /* Kill up to this many victims per reclaim */
 #define MAX_VICTIMS 1024
