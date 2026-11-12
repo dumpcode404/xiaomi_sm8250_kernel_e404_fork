@@ -1777,23 +1777,28 @@ static int write_incompressible_page(struct zram *zram, struct page *page,
 	void *src, *tmp;
 	int ret;
 
-	zram_slot_lock(zram, index);
-	zram_free_page(zram, index);
 	/*
-	 * Copy out of the kmap'd page before zs_store(): the store can
-	 * sleep in the page allocator while kmap_atomic holds preemption
-	 * disabled (scheduling while atomic, then an unbalanced count
-	 * trips the next schedule too). Use the per-CPU bounce buffer
-	 * and keep the pinned window sleep-free.
+	 * Allocate a temporary bounce buffer so we do not hold a kmap_atomic
+	 * mapping while zs_store() is called. zs_store() may sleep in the
+	 * page allocator, which triggers "scheduling while atomic".
 	 */
-	tmp = (void *)get_cpu_var(zram_bounce_buffer);
+	tmp = kmalloc(PAGE_SIZE, GFP_NOIO);
+	if (!tmp)
+		return -ENOMEM;
+
 	src = kmap_atomic(page);
 	memcpy(tmp, src, PAGE_SIZE);
 	kunmap_atomic(src);
-	put_cpu_var(zram_bounce_buffer);
+
+	zram_slot_lock(zram, index);
+	zram_free_page(zram, index);
+
 	ret = zs_store(zram->mem_pool, &zram->table[index].handle, tmp,
 		       PAGE_SIZE, GFP_NOIO | __GFP_NOWARN |
 		       __GFP_HIGHMEM | __GFP_MOVABLE);
+
+	kfree(tmp);
+
 	if (ret) {
 		zram_slot_unlock(zram, index);
 		return ret;
