@@ -6,6 +6,7 @@
 #include <linux/highmem.h>
 #include <linux/swap.h>
 #include <linux/memcontrol.h>
+#include <linux/pagemap.h>
 
 /*
  * Folio compat shim: 4.19 backport of the mainline stable 6.6 folio API
@@ -113,6 +114,29 @@ static inline void folio_deactivate(struct folio *folio)
 static inline void folio_deactivate_file(struct folio *folio)
 {
 	deactivate_file_page(&folio->page);
+}
+
+static inline void folio_add_lru_anon(struct folio *folio)
+{
+	lru_cache_add_anon(&folio->page);
+}
+
+/*
+ * XArray-folio API: 6.6 looks swap/page cache slots up as folios.
+ * find_get_page() performs the XArray lookup under RCU (xa_load path)
+ * and returns the resident page with a ref held (NULL for miss or for
+ * shadow-only slots); page_folio() then presents it as a folio.
+ * xa_lock-protected stores/erases stay at the converted call sites in
+ * mm/swap_state.c, where the xas locking discipline is preserved.
+ */
+static inline struct folio *filemap_get_folio(struct address_space *mapping,
+					      pgoff_t index)
+{
+	struct page *page = find_get_page(mapping, index);
+
+	if (!page)
+		return NULL;
+	return page_folio(page);
 }
 
 /*

@@ -22,6 +22,7 @@
 #include <linux/vmalloc.h>
 #include <linux/swap_slots.h>
 #include <linux/huge_mm.h>
+#include <linux/folio_compat.h>
 
 #include <asm/pgtable.h>
 #include "internal.h"
@@ -112,20 +113,21 @@ void show_swap_cache_info(void)
  * add_to_swap_cache resembles add_to_page_cache_locked on swapper_space,
  * but sets SwapCache flag and private instead of mapping and index.
  */
-static int __add_to_swap_cache(struct page *page, swp_entry_t entry,
+static int __add_to_swap_cache(struct folio *folio, swp_entry_t entry,
 				    gfp_t gfp, void **shadowp)
 {
 	struct address_space *address_space = swap_address_space(entry);
 	pgoff_t idx = swp_offset(entry);
-	XA_STATE_ORDER(xas, &address_space->i_pages, idx, compound_order(page));
-	unsigned long i, nr = 1UL << compound_order(page);
+	XA_STATE_ORDER(xas, &address_space->i_pages, idx,
+		       compound_order(&folio->page));
+	unsigned long i, nr = 1UL << compound_order(&folio->page);
 
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE(PageSwapCache(page), page);
-	VM_BUG_ON_PAGE(!PageSwapBacked(page), page);
+	VM_BUG_ON_PAGE(!PageLocked(&folio->page), &folio->page);
+	VM_BUG_ON_PAGE(PageSwapCache(&folio->page), &folio->page);
+	VM_BUG_ON_PAGE(!PageSwapBacked(&folio->page), &folio->page);
 
-	page_ref_add(page, nr);
-	SetPageSwapCache(page);
+	page_ref_add(&folio->page, nr);
+	SetPageSwapCache(&folio->page);
 
 	do {
 		xas_lock_irq(&xas);
@@ -135,9 +137,9 @@ static int __add_to_swap_cache(struct page *page, swp_entry_t entry,
 		for (i = 0; i < nr; i++) {
 			void *shadow;
 
-			VM_BUG_ON_PAGE(xas.xa_index != idx + i, page);
-			set_page_private(page + i, entry.val + i);
-			shadow = xas_store(&xas, page + i);
+			VM_BUG_ON_PAGE(xas.xa_index != idx + i, &folio->page);
+			set_page_private(folio_page(folio, i), entry.val + i);
+			shadow = xas_store(&xas, folio_page(folio, i));
 
 			if (shadowp) {
 				VM_BUG_ON(i);
@@ -147,7 +149,7 @@ static int __add_to_swap_cache(struct page *page, swp_entry_t entry,
 			xas_next(&xas);
 		}
 		address_space->nrpages += nr;
-		__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, nr);
+		__mod_node_page_state(page_pgdat(&folio->page), NR_FILE_PAGES, nr);
 		ADD_CACHE_INFO(add_total, nr);
 unlock:
 		xas_unlock_irq(&xas);
@@ -156,14 +158,15 @@ unlock:
 	if (!xas_error(&xas))
 		return 0;
 
-	ClearPageSwapCache(page);
-	page_ref_sub(page, nr);
+	ClearPageSwapCache(&folio->page);
+	page_ref_sub(&folio->page, nr);
 	return xas_error(&xas);
 }
 
 int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp)
 {
-	return __add_to_swap_cache(page, entry, gfp, NULL);
+	/* External gate: mm callers still pass struct page *. */
+	return __add_to_swap_cache(page_folio(page), entry, gfp, NULL);
 }
 
 /*
@@ -174,25 +177,27 @@ void __delete_from_swap_cache(struct page *page, swp_entry_t entry,
 				  void *shadow)
 {
 	struct address_space *address_space = swap_address_space(entry);
-	int i, nr = hpage_nr_pages(page);
+	/* External gate (e.g. vmscan.c): convert to folio once. */
+	struct folio *folio = page_folio(page);
+	int i, nr = hpage_nr_pages(&folio->page);
 	pgoff_t idx = swp_offset(entry);
 	XA_STATE(xas, &address_space->i_pages, idx);
 
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-	VM_BUG_ON_PAGE(PageWriteback(page), page);
+	VM_BUG_ON_PAGE(!PageLocked(&folio->page), &folio->page);
+	VM_BUG_ON_PAGE(!PageSwapCache(&folio->page), &folio->page);
+	VM_BUG_ON_PAGE(PageWriteback(&folio->page), &folio->page);
 
 	for (i = 0; i < nr; i++) {
 		void *old;
 
 		old = xas_store(&xas, shadow);
-		VM_BUG_ON_PAGE(old != page + i, page);
-		set_page_private(page + i, 0);
+		VM_BUG_ON_PAGE(old != folio_page(folio, i), &folio->page);
+		set_page_private(folio_page(folio, i), 0);
 		xas_next(&xas);
 	}
-	ClearPageSwapCache(page);
+	ClearPageSwapCache(&folio->page);
 	address_space->nrpages -= nr;
-	__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, -nr);
+	__mod_node_page_state(page_pgdat(&folio->page), NR_FILE_PAGES, -nr);
 	ADD_CACHE_INFO(del_total, nr);
 }
 
@@ -296,13 +301,14 @@ void delete_from_swap_cache(struct page *page)
 {
 	swp_entry_t entry = { .val = page_private(page) };
 	struct address_space *address_space = swap_address_space(entry);
+	struct folio *folio = page_folio(page);
 
 	xa_lock_irq(&address_space->i_pages);
 	__delete_from_swap_cache(page, entry, NULL);
 	xa_unlock_irq(&address_space->i_pages);
 
-	put_swap_page(page, entry);
-	page_ref_sub(page, hpage_nr_pages(page));
+	put_swap_page(folio_page(folio, 0), entry);
+	page_ref_sub(&folio->page, hpage_nr_pages(&folio->page));
 }
 
 /* 
@@ -361,9 +367,11 @@ static inline bool swap_use_vma_readahead(void)
 struct page *lookup_swap_cache(swp_entry_t entry, struct vm_area_struct *vma,
 			       unsigned long addr)
 {
+	struct folio *folio;
 	struct page *page;
 
-	page = find_get_page(swap_address_space(entry), swp_offset(entry));
+	folio = filemap_get_folio(swap_address_space(entry), swp_offset(entry));
+	page = folio ? folio_page(folio, 0) : NULL;
 
 	INC_CACHE_INFO(find_total);
 	if (page) {
@@ -406,7 +414,7 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			struct vm_area_struct *vma, unsigned long addr,
 			bool *new_page_allocated)
 {
-	struct page *found_page, *new_page = NULL;
+	struct folio *found_folio, *new_folio = NULL;
 	struct address_space *swapper_space = swap_address_space(entry);
 	int err;
 	void *shadow;
@@ -419,8 +427,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		 * called after lookup_swap_cache() failed, re-calling
 		 * that would confuse statistics.
 		 */
-		found_page = find_get_page(swapper_space, swp_offset(entry));
-		if (found_page)
+		found_folio = filemap_get_folio(swapper_space, swp_offset(entry));
+		if (found_folio)
 			break;
 
 		/*
@@ -437,9 +445,9 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		/*
 		 * Get a new page to read into from swap.
 		 */
-		if (!new_page) {
-			new_page = alloc_page_vma(gfp_mask, vma, addr);
-			if (!new_page)
+		if (!new_folio) {
+			new_folio = page_folio(alloc_page_vma(gfp_mask, vma, addr));
+			if (!new_folio)
 				break;		/* Out of memory */
 		}
 
@@ -459,32 +467,32 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			break;
 
 		/* May fail (-ENOMEM) if XArray node allocation failed. */
-		__SetPageLocked(new_page);
-		__SetPageSwapBacked(new_page);
-		err = __add_to_swap_cache(new_page, entry,
+		__SetPageLocked(&new_folio->page);
+		__SetPageSwapBacked(&new_folio->page);
+		err = __add_to_swap_cache(new_folio, entry,
 					  gfp_mask & GFP_RECLAIM_MASK, &shadow);
 		if (likely(!err)) {
 			/* Initiate read into locked page */
 			if (!lru_gen_enabled())
-				SetPageWorkingset(new_page);
+				SetPageWorkingset(&new_folio->page);
 			else if (shadow)
-				lru_gen_refault(new_page, shadow);
+				lru_gen_refault(&new_folio->page, shadow);
 
-			lru_cache_add_anon(new_page);
+			folio_add_lru_anon(new_folio);
 			*new_page_allocated = true;
-			return new_page;
+			return folio_page(new_folio, 0);
 		}
-		__ClearPageLocked(new_page);
+		__ClearPageLocked(&new_folio->page);
 		/*
 		 * add_to_swap_cache() doesn't return -EEXIST, so we can safely
 		 * clear SWAP_HAS_CACHE flag.
 		 */
-		put_swap_page(new_page, entry);
+		put_swap_page(&new_folio->page, entry);
 	} while (err != -ENOMEM);
 
-	if (new_page)
-		put_page(new_page);
-	return found_page;
+	if (new_folio)
+		folio_put(new_folio);
+	return found_folio ? folio_page(found_folio, 0) : NULL;
 }
 
 /*
@@ -588,7 +596,7 @@ static unsigned long swapin_nr_pages(unsigned long offset)
 struct page *swap_cluster_readahead(swp_entry_t entry, gfp_t gfp_mask,
 				struct vm_fault *vmf)
 {
-	struct page *page;
+	struct folio *folio;
 	unsigned long entry_offset = swp_offset(entry);
 	unsigned long offset = entry_offset;
 	unsigned long start_offset, end_offset;
@@ -615,19 +623,19 @@ struct page *swap_cluster_readahead(swp_entry_t entry, gfp_t gfp_mask,
 	blk_start_plug(&plug);
 	for (offset = start_offset; offset <= end_offset ; offset++) {
 		/* Ok, do the async read-ahead now */
-		page = __read_swap_cache_async(
+		folio = page_folio(__read_swap_cache_async(
 			swp_entry(swp_type(entry), offset),
-			gfp_mask, vma, addr, &page_allocated);
-		if (!page)
+			gfp_mask, vma, addr, &page_allocated));
+		if (!folio)
 			continue;
 		if (page_allocated) {
-			swap_readpage(page, false);
+			swap_readpage(&folio->page, false);
 			if (offset != entry_offset) {
-				SetPageReadahead(page);
+				SetPageReadahead(&folio->page);
 				count_vm_event(SWAP_RA);
 			}
 		}
-		put_page(page);
+		folio_put(folio);
 	}
 	blk_finish_plug(&plug);
 
@@ -756,12 +764,12 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 {
 	struct blk_plug plug;
 	struct vm_area_struct *vma = vmf->vma;
-	struct page *page;
 	pte_t *pte, pentry;
 	swp_entry_t entry;
 	unsigned int i;
 	bool page_allocated;
 	struct vma_swap_readahead ra_info = {0,};
+	struct folio *folio;
 
 	swap_ra_info(vmf, &ra_info);
 	if (ra_info.win == 1)
@@ -778,18 +786,18 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 		entry = pte_to_swp_entry(pentry);
 		if (unlikely(non_swap_entry(entry)))
 			continue;
-		page = __read_swap_cache_async(entry, gfp_mask, vma,
-					       vmf->address, &page_allocated);
-		if (!page)
+		folio = page_folio(__read_swap_cache_async(entry, gfp_mask, vma,
+					       vmf->address, &page_allocated));
+		if (!folio)
 			continue;
 		if (page_allocated) {
-			swap_readpage(page, false);
+			swap_readpage(&folio->page, false);
 			if (i != ra_info.offset) {
-				SetPageReadahead(page);
+				SetPageReadahead(&folio->page);
 				count_vm_event(SWAP_RA);
 			}
 		}
-		put_page(page);
+		folio_put(folio);
 	}
 	blk_finish_plug(&plug);
 	lru_add_drain();
