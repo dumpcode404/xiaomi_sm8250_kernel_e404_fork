@@ -2342,6 +2342,9 @@ no_cached_page:
 			error = -ENOMEM;
 			goto out;
 		}
+		/* Newly allocated page enters folio tracking here; the
+		 * lookup folio above is NULL/stale on this path. */
+		folio = page_folio(page);
 		error = add_to_page_cache_lru(page, mapping, index,
 				mapping_gfp_constraint(mapping, GFP_KERNEL));
 		if (error) {
