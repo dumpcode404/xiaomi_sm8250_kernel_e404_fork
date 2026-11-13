@@ -9,6 +9,17 @@
 #define _LRNG_CHACHA20_H
 
 #include <crypto/chacha.h>
+/* 4.19 adaptation: crypto/chacha20.h does not exist here; map the
+ * CHACHA20_* names and provide chacha_init_consts locally. */
+#define CHACHA20_KEY_SIZE	CHACHA_KEY_SIZE
+#define CHACHA20_BLOCK_SIZE	CHACHA_BLOCK_SIZE
+static inline void chacha_init_consts(u32 *state)
+{
+	state[0] = 0x61707865; /* "expa" */
+	state[1] = 0x3320646e; /* "nd 3" */
+	state[2] = 0x79622d32; /* "2-by" */
+	state[3] = 0x6b206574; /* "te k" */
+}
 
 /* State according to RFC 7539 section 2.3 */
 struct chacha20_block {
@@ -28,7 +39,7 @@ struct chacha20_state {
 
 static inline void lrng_cc20_init_rfc7539(struct chacha20_block *chacha20)
 {
-	chacha_init_consts((struct chacha_state *)chacha20->constants);
+	chacha_init_consts(chacha20->constants);
 }
 
 #define LRNG_CC20_INIT_RFC7539(x) \
