@@ -78,3 +78,6 @@ obj-$(CONFIG_VSERVICES_SERIAL_SERVER)	+= vs_serial_server.o
 CFLAGS_vs_serial_server.o	+= -Werror
 obj-$(CONFIG_RB5_FAN_CONTROLLER)	+= rb5_fan.o
 obj-$(CONFIG_RB5_GPIOS_ENABLE)	+= rb5-gpios-enable.o
+
+# LRNG v60: entry point for drivers/char/lrng/
+obj-$(CONFIG_LRNG)		+= lrng/
