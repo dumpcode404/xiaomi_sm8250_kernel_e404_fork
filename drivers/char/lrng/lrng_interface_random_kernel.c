@@ -8,9 +8,11 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/blkdev.h>
+#include <linux/err.h>
 #include <linux/hw_random.h>
 #include <linux/kthread.h>
 #include <linux/lrng.h>
+#include <linux/module.h>
 #include <linux/random.h>
 
 #include "lrng_es_aux.h"
@@ -18,6 +20,10 @@
 #include "lrng_es_mgr.h"
 #include "lrng_interface_dev_common.h"
 #include "lrng_interface_random_kernel.h"
+
+static RAW_NOTIFIER_HEAD(lrng_ready_chain);
+static DEFINE_SPINLOCK(lrng_ready_chain_lock);
+static unsigned int lrng_ready_chain_used = 0;
 
 static ATOMIC_NOTIFIER_HEAD(random_ready_notifier);
 
@@ -32,15 +38,17 @@ static int __init lrng_parse_trust_bootloader(char *arg)
 }
 early_param("random.trust_bootloader", lrng_parse_trust_bootloader);
 
-void __init random_init_early(const char *command_line)
+static void __init random_init_early(const char *command_line)
 {
 	lrng_rand_initialize_early();
 	lrng_pool_insert_aux(command_line, strlen(command_line), 0);
 }
 
-void __init random_init(void)
+int __init random_init(const char *command_line)
 {
+	random_init_early(command_line);
 	lrng_rand_initialize();
+	return 0;
 }
 
 /*
@@ -65,9 +73,116 @@ int __cold execute_with_initialized_rng(struct notifier_block *nb)
 	return ret;
 }
 
+/* 4.19 compatibility: legacy random.c API entry points.
+ * start_kernel() calls rand_initialize(), and crypto/drbg.c uses the
+ * struct random_ready_callback API. Both were provided by
+ * drivers/char/random.c, which is not compiled with LRNG_DEFAULT=n.
+ * Content below is backport glue, not upstream logic. */
+int __init rand_initialize(void)
+{
+	lrng_rand_initialize_early();
+	lrng_rand_initialize();
+	return 0;
+}
+
+static LIST_HEAD(legacy_ready_list);
+static DEFINE_SPINLOCK(legacy_ready_lock);
+
+int add_random_ready_callback(struct random_ready_callback *rdy)
+{
+	unsigned long flags;
+
+	if (!try_module_get(rdy->owner))
+		return -ENOENT;
+	if (rng_is_initialized()) {
+		module_put(rdy->owner);
+		return -EALREADY;
+	}
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	list_add_tail(&rdy->list, &legacy_ready_list);
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
+	return 0;
+}
+EXPORT_SYMBOL(add_random_ready_callback);
+
+void del_random_ready_callback(struct random_ready_callback *rdy)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	if (!list_empty(&rdy->list)) {
+		list_del_init(&rdy->list);
+		module_put(rdy->owner);
+	}
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
+}
+EXPORT_SYMBOL(del_random_ready_callback);
+
+/* Drop-in for the legacy random.c helper used by arch_randomize_brk().
+ * Implementation is the unchanged legacy algorithm operating on the
+ * LRNG-backed get_random_long(). */
+unsigned long randomize_page(unsigned long start, unsigned long range)
+{
+	if (!PAGE_ALIGNED(start)) {
+		range -= PAGE_ALIGN(start) - start;
+		start = PAGE_ALIGN(start);
+	}
+
+	if (start > ULONG_MAX - range)
+		range = ULONG_MAX - start;
+
+	range >>= PAGE_SHIFT;
+
+	if (range == 0)
+		return start;
+
+	return start + (get_random_long() % range << PAGE_SHIFT);
+}
+EXPORT_SYMBOL(randomize_page);
+
 void lrng_kick_random_ready(void)
 {
+	struct random_ready_callback *rdy, *tmp;
+	unsigned long flags;
+
 	atomic_notifier_call_chain(&random_ready_notifier, 0, NULL);
+	/* fire legacy 4.19 callbacks stashed above */
+	spin_lock_irqsave(&legacy_ready_lock, flags);
+	list_for_each_entry_safe(rdy, tmp, &legacy_ready_list, list) {
+		list_del_init(&rdy->list);
+		spin_unlock_irqrestore(&legacy_ready_lock, flags);
+		rdy->func(rdy);
+		module_put(rdy->owner);
+		spin_lock_irqsave(&legacy_ready_lock, flags);
+	}
+	spin_unlock_irqrestore(&legacy_ready_lock, flags);
+}
+
+bool lrng_ready_chain_has_sleeper(void)
+{
+	return !!lrng_ready_chain_used;
+}
+
+/*
+ * lrng_process_ready_list() - Ping all kernel internal callers waiting until
+ * the DRNG is completely initialized to inform that the DRNG reached that
+ * seed level.
+ *
+ * When the SP800-90B testing is enabled, the ping only happens if the SP800-90B
+ * startup health tests are completed. This implies that kernel internal
+ * callers always have an SP800-90B compliant noise source when being
+ * pinged.
+ */
+void lrng_process_ready_list(void)
+{
+	unsigned long flags;
+
+	if (!lrng_state_operational())
+		return;
+
+	spin_lock_irqsave(&lrng_ready_chain_lock, flags);
+	raw_notifier_call_chain(&lrng_ready_chain, 0, NULL);
+	spin_unlock_irqrestore(&lrng_ready_chain_lock, flags);
 }
 
 /************************ LRNG kernel input interfaces ************************/
@@ -84,8 +199,8 @@ void lrng_kick_random_ready(void)
  * @count: length of buffer
  * @entropy_bits: amount of entropy in buffer (value is in bits)
  */
-void add_hwgenerator_randomness(const void *buffer, size_t count,
-				size_t entropy_bits, bool sleep_after)
+void add_hwgenerator_randomness(const char *buffer, size_t count,
+				size_t entropy_bits)
 {
 	/*
 	 * Suspend writing if we are fully loaded with entropy or if caller
@@ -96,10 +211,9 @@ void add_hwgenerator_randomness(const void *buffer, size_t count,
 	wait_event_interruptible(lrng_write_wait,
 				(lrng_need_entropy() && entropy_bits) ||
 				lrng_state_exseed_allow(lrng_noise_source_hw) ||
-				!sleep_after ||
 				kthread_should_stop());
 	lrng_state_exseed_set(lrng_noise_source_hw, false);
-	lrng_pool_insert_aux(buffer, count, entropy_bits);
+	lrng_pool_insert_aux((const u8 *)buffer, count, entropy_bits);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
 
@@ -114,7 +228,7 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  *	 insert into entropy pool.
  * @size: length of buffer
  */
-void __init add_bootloader_randomness(const void *buf, size_t size)
+void __init add_bootloader_randomness(const void *buf, unsigned int size)
 {
 	lrng_pool_insert_aux(buf, size, lrng_trust_bootloader ? size * 8 : 0);
 }
@@ -149,7 +263,7 @@ EXPORT_SYMBOL_GPL(add_input_randomness);
  *	 insert into entropy pool.
  * @size: length of buffer
  */
-void add_device_randomness(const void *buf, size_t size)
+void add_device_randomness(const void *buf, unsigned int size)
 {
 	lrng_pool_insert_aux((u8 *)buf, size, 0);
 }
@@ -162,9 +276,65 @@ EXPORT_SYMBOL(add_disk_randomness);
 #endif
 
 #ifndef CONFIG_LRNG_IRQ
-void add_interrupt_randomness(int irq) { }
+void add_interrupt_randomness(int irq, int irq_flags)
+{
+	(void)irq;
+	(void)irq_flags;
+}
 EXPORT_SYMBOL(add_interrupt_randomness);
 #endif
+
+/*
+ * unregister_random_ready_notifier() - Delete a previously registered readiness
+ * callback function.
+ *
+ * @nb: callback definition that was registered initially
+ */
+int unregister_random_ready_notifier(struct notifier_block *nb)
+{
+	unsigned long flags;
+	int ret;
+
+	spin_lock_irqsave(&lrng_ready_chain_lock, flags);
+	ret = raw_notifier_chain_unregister(&lrng_ready_chain, nb);
+	spin_unlock_irqrestore(&lrng_ready_chain_lock, flags);
+
+	if (!ret && lrng_ready_chain_used)
+		lrng_ready_chain_used--;
+
+	return ret;
+}
+EXPORT_SYMBOL(unregister_random_ready_notifier);
+
+/*
+ * register_random_ready_notifier() - Add a callback function that will be
+ * invoked when the DRNG is fully initialized and seeded.
+ *
+ * @nb: callback definition to be invoked when the LRNG is seeded
+ *
+ * Return:
+ * * 0 if callback is successfully added
+ * * -EALREADY if pool is already initialised (callback not called)
+ */
+int register_random_ready_notifier(struct notifier_block *nb)
+{
+	unsigned long flags;
+	int err = -EALREADY;
+
+	if (likely(lrng_state_operational()))
+		return err;
+
+	spin_lock_irqsave(&lrng_ready_chain_lock, flags);
+	if (!lrng_state_operational())
+		err = raw_notifier_chain_register(&lrng_ready_chain, nb);
+	spin_unlock_irqrestore(&lrng_ready_chain_lock, flags);
+
+	if (!err)
+		lrng_ready_chain_used++;
+
+	return err;
+}
+EXPORT_SYMBOL(register_random_ready_notifier);
 
 #if IS_ENABLED(CONFIG_VMGENID)
 static BLOCKING_NOTIFIER_HEAD(lrng_vmfork_chain);
@@ -210,7 +380,7 @@ EXPORT_SYMBOL_GPL(unregister_random_vmfork_notifier);
  * @buf: buffer to store the random bytes
  * @nbytes: size of the buffer
  */
-void get_random_bytes(void *buf, size_t nbytes)
+void get_random_bytes(void *buf, int nbytes)
 {
 	lrng_get_random_bytes(buf, nbytes);
 }
@@ -234,6 +404,43 @@ int wait_for_random_bytes(void)
 	return lrng_drng_sleep_while_non_min_seeded();
 }
 EXPORT_SYMBOL(wait_for_random_bytes);
+
+/*
+ * get_random_bytes_arch() - This function will use the architecture-specific
+ * hardware random number generator if it is available.
+ *
+ * The arch-specific hw RNG will almost certainly be faster than what we can
+ * do in software, but it is impossible to verify that it is implemented
+ * securely (as opposed, to, say, the AES encryption of a sequence number using
+ * a key known by the NSA).  So it's useful if we need the speed, but only if
+ * we're willing to trust the hardware manufacturer not to have put in a back
+ * door.
+ *
+ * @buf: buffer allocated by caller to store the random data in
+ * @nbytes: length of outbuf
+ *
+ * Return: number of bytes filled in.
+ */
+int __must_check get_random_bytes_arch(void *buf, int nbytes)
+{
+	size_t left = nbytes;
+	u8 *p = buf;
+
+	while (left) {
+		unsigned long v;
+		size_t chunk = min_t(size_t, left, sizeof(unsigned long));
+
+		if (!arch_get_random_long(&v))
+			break;
+
+		memcpy(p, &v, chunk);
+		p += chunk;
+		left -= chunk;
+	}
+
+	return nbytes - left;
+}
+EXPORT_SYMBOL(get_random_bytes_arch);
 
 /*
  * Returns whether or not the LRNG has been seeded.
