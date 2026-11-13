@@ -17,66 +17,9 @@
 
 #include <linux/rwsem.h>
 #include <linux/zsmalloc.h>
-#include <linux/mm.h>
-#include <linux/highmem.h>
+#include <linux/folio_compat.h>
 
 #include "zcomp.h"
-
-/*
- * Folio PoC compat (4.19 backport of the 6.6 folio API subset used by zram).
- *
- * Mainline 6.6 converted zram's internal paths to struct folio; this tree
- * (4.19) has no struct folio yet. For order-0 zram pages folio == page 1:1,
- * with struct page as the first (only) member, so page_folio() is a plain
- * cast. kmap_local_folio()/kunmap_local() map to kmap_atomic()/kunmap_atomic()
- * here (callers use offset 0 / full-page only, no nesting beyond the existing
- * bounce-buffer discipline).
- */
-struct folio {
-	struct page page;
-};
-
-static inline struct folio *page_folio(struct page *page)
-{
-	return (struct folio *)page;
-}
-
-static inline struct page *folio_page(struct folio *folio, unsigned long n)
-{
-	return &folio->page + n;
-}
-
-static inline struct folio *folio_alloc(gfp_t gfp, unsigned int order)
-{
-	struct page *page = alloc_pages(gfp, order);
-
-	return page ? page_folio(page) : NULL;
-}
-
-static inline void folio_put(struct folio *folio)
-{
-	put_page(&folio->page);
-}
-
-static inline void *folio_address(struct folio *folio)
-{
-	return page_address(&folio->page);
-}
-
-static inline void *kmap_local_folio(struct folio *folio, size_t offset)
-{
-	return kmap_atomic(&folio->page) + offset;
-}
-
-static inline void kunmap_local(const void *addr)
-{
-	kunmap_atomic((void *)addr);
-}
-
-static inline void flush_dcache_folio(struct folio *folio)
-{
-	flush_dcache_page(&folio->page);
-}
 
 #define SECTORS_PER_PAGE_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define SECTORS_PER_PAGE	(1 << SECTORS_PER_PAGE_SHIFT)
