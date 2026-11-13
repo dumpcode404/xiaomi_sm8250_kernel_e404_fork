@@ -59,7 +59,7 @@ static size_t huge_class_size;
  * pins its CPU with get_cpu_ptr() across zs_obj_read_begin..read_end +
  * decompress; preemption must stay disabled for the whole window or a
  * second reader on the same CPU would overwrite the buffer mid-use.
- * Nothing in that window may sleep: rwlock/spinlocks + kmap_atomic +
+ * Nothing in that window may sleep: rwlock/spinlocks + kmap_local_folio +
  * pure-compute backends only (zcomp_decompress()'s might_sleep() is a
  * no-op here but remains a tripwire on debug kernels). 8 x 4K = 32K.
  */
@@ -80,7 +80,7 @@ static void free_zram_bounce_buffers(void)
 static const struct block_device_operations zram_devops;
 
 static void zram_free_page(struct zram *zram, size_t index);
-static int zram_read_from_zspool(struct zram *zram, struct page *page,
+static int zram_read_from_zspool(struct zram *zram, struct folio *folio,
 				 u32 index);
 
 #define slot_dep_map(zram, index) (&(zram)->table[(index)].dep_map)
@@ -820,7 +820,7 @@ static ssize_t writeback_store(struct device *dev,
 	unsigned long index = 0;
 	struct bio bio;
 	struct bio_vec bio_vec;
-	struct page *page = NULL;
+	struct folio *folio = NULL;
 	ssize_t ret = len;
 	int mode, err;
 	unsigned long blk_idx = 0;
@@ -862,8 +862,8 @@ static ssize_t writeback_store(struct device *dev,
 		goto release_init_lock;
 	}
 
-	page = alloc_page(GFP_KERNEL);
-	if (!page) {
+	folio = folio_alloc(GFP_KERNEL, 0);
+	if (!folio) {
 		ret = -ENOMEM;
 		goto release_init_lock;
 	}
@@ -903,14 +903,14 @@ static ssize_t writeback_store(struct device *dev,
 		 */
 		if (!zram_test_flag(zram, index, ZRAM_PP_SLOT))
 			goto next;
-		if (zram_read_from_zspool(zram, page, index))
+		if (zram_read_from_zspool(zram, folio, index))
 			goto next;
 		zram_slot_unlock(zram, index);
 
 		bio_init(&bio, zram->bdev, &bio_vec, 1,
 			 REQ_OP_WRITE | REQ_SYNC);
 		bio.bi_iter.bi_sector = blk_idx * (PAGE_SIZE >> 9);
-		__bio_add_page(&bio, page, PAGE_SIZE, 0);
+		__bio_add_page(&bio, folio_page(folio, 0), PAGE_SIZE, 0);
 
 		/*
 		 * XXX: A single page IO would be inefficient for write
@@ -964,8 +964,8 @@ next:
 		free_block_bdev(zram, blk_idx);
 
 release_init_lock:
-	if (page)
-		__free_page(page);
+	if (folio)
+		folio_put(folio);
 	release_pp_ctl(zram, ctl);
 	atomic_set(&zram->pp_in_progress, 0);
 	up_read(&zram->init_lock);
@@ -1604,18 +1604,18 @@ out:
 	zram_set_obj_size(zram, index, 0);
 }
 
-static int read_same_filled_page(struct zram *zram, struct page *page,
+static int read_same_filled_page(struct zram *zram, struct folio *folio,
 				 u32 index)
 {
 	void *mem;
 
-	mem = kmap_atomic(page);
+	mem = kmap_local_folio(folio, 0);
 	zram_fill_page(mem, PAGE_SIZE, zram->table[index].element);
-	kunmap_atomic(mem);
+	kunmap_local(mem);
 	return 0;
 }
 
-static int read_incompressible_page(struct zram *zram, struct page *page,
+static int read_incompressible_page(struct zram *zram, struct folio *folio,
 				    u32 index)
 {
 	struct zs_handle *handle;
@@ -1623,15 +1623,15 @@ static int read_incompressible_page(struct zram *zram, struct page *page,
 
 	handle = &zram->table[index].handle;
 	src = zs_obj_read_begin(zram->mem_pool, handle, PAGE_SIZE, NULL);
-	dst = kmap_atomic(page);
+	dst = kmap_local_folio(folio, 0);
 	copy_page(dst, src);
-	kunmap_atomic(dst);
+	kunmap_local(dst);
 	zs_obj_read_end(zram->mem_pool, handle, PAGE_SIZE, src);
 
 	return 0;
 }
 
-static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
+static int read_compressed_page(struct zram *zram, struct folio *folio, u32 index)
 {
 	enum zcomp_dstrm_mode mode = ZCOMP_DSTRM_EXCLUSIVE;
 	struct zcomp_dstrm *zstrm;
@@ -1673,9 +1673,9 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
 	else
 		src = zs_obj_read_begin(zram->mem_pool, handle, size,
 					zstrm->local_copy);
-	dst = kmap_atomic(page);
+	dst = kmap_local_folio(folio, 0);
 	ret = zcomp_decompress(comp, zstrm, src, size, dst);
-	kunmap_atomic(dst);
+	kunmap_local(dst);
 	zs_obj_read_end(zram->mem_pool, handle, size, src);
 	if (mode == ZCOMP_DSTRM_SHARED)
 		put_cpu_var(zram_bounce_buffer);
@@ -1688,20 +1688,20 @@ static int read_compressed_page(struct zram *zram, struct page *page, u32 index)
  * Reads (decompresses if needed) a page from zspool (zsmalloc).
  * Corresponding ZRAM slot should be locked.
  */
-static int zram_read_from_zspool(struct zram *zram, struct page *page,
+static int zram_read_from_zspool(struct zram *zram, struct folio *folio,
 				 u32 index)
 {
 	if (zram_test_flag(zram, index, ZRAM_SAME) ||
 	    !zs_handle_is_allocated(&zram->table[index].handle))
-		return read_same_filled_page(zram, page, index);
+		return read_same_filled_page(zram, folio, index);
 
 	if (!zram_test_flag(zram, index, ZRAM_HUGE))
-		return read_compressed_page(zram, page, index);
+		return read_compressed_page(zram, folio, index);
 	else
-		return read_incompressible_page(zram, page, index);
+		return read_incompressible_page(zram, folio, index);
 }
 
-static int zram_read_page(struct zram *zram, struct page *page, u32 index,
+static int zram_read_page(struct zram *zram, struct folio *folio, u32 index,
 			  struct bio *parent)
 {
 	int ret;
@@ -1709,7 +1709,7 @@ static int zram_read_page(struct zram *zram, struct page *page, u32 index,
 	zram_slot_lock(zram, index);
 	if (!zram_test_flag(zram, index, ZRAM_WB)) {
 		/* Slot should be locked through out the function call */
-		ret = zram_read_from_zspool(zram, page, index);
+		ret = zram_read_from_zspool(zram, folio, index);
 		zram_slot_unlock(zram, index);
 	} else {
 		/*
@@ -1718,7 +1718,7 @@ static int zram_read_page(struct zram *zram, struct page *page, u32 index,
 		 */
 		zram_slot_unlock(zram, index);
 
-		ret = read_from_bdev(zram, page, zram->table[index].blk_idx,
+		ret = read_from_bdev(zram, folio_page(folio, 0), zram->table[index].blk_idx,
 				     parent);
 	}
 
@@ -1736,24 +1736,27 @@ static int zram_read_page(struct zram *zram, struct page *page, u32 index,
 static int zram_bvec_read_partial(struct zram *zram, struct bio_vec *bvec,
 				  u32 index, int offset)
 {
-	struct page *page = alloc_page(GFP_NOIO);
+	struct folio *folio = folio_alloc(GFP_NOIO, 0);
 	int ret;
 
-	if (!page)
+	if (!folio)
 		return -ENOMEM;
-	ret = zram_read_page(zram, page, index, NULL);
+	ret = zram_read_page(zram, folio, index, NULL);
 	if (likely(!ret))
-		memcpy_to_bvec(bvec, page_address(page) + offset);
-	__free_page(page);
+		memcpy_to_bvec(bvec, folio_address(folio) + offset);
+	folio_put(folio);
 	return ret;
 }
 
 static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 			  u32 index, int offset, struct bio *bio)
 {
+	/* Block-layer boundary: convert incoming page to folio once. */
+	struct folio *folio = page_folio(bvec->bv_page);
+
 	if (is_partial_io(bvec))
 		return zram_bvec_read_partial(zram, bvec, index, offset);
-	return zram_read_page(zram, bvec->bv_page, index, bio);
+	return zram_read_page(zram, folio, index, bio);
 }
 
 static int write_same_filled_page(struct zram *zram, unsigned long fill,
@@ -1771,24 +1774,27 @@ static int write_same_filled_page(struct zram *zram, unsigned long fill,
 	return 0;
 }
 
-static int write_incompressible_page(struct zram *zram, struct page *page,
+static int write_incompressible_page(struct zram *zram, struct folio *folio,
 				     u32 index)
 {
 	void *src, *tmp;
 	int ret;
 
 	/*
-	 * Allocate a temporary bounce buffer so we do not hold a kmap_atomic
-	 * mapping while zs_store() is called. zs_store() may sleep in the
-	 * page allocator, which triggers "scheduling while atomic".
+	 * Allocate a temporary bounce buffer so we do not hold a
+	 * kmap_local_folio() mapping while zs_store() is called. zs_store()
+	 * may sleep in the page allocator, which triggers
+	 * "scheduling while atomic". The kunmap_local() before zs_store()
+	 * below is load-bearing: do not move zs_store() inside the kmap
+	 * window during folio conversions.
 	 */
 	tmp = kmalloc(PAGE_SIZE, GFP_NOIO);
 	if (!tmp)
 		return -ENOMEM;
 
-	src = kmap_atomic(page);
+	src = kmap_local_folio(folio, 0);
 	memcpy(tmp, src, PAGE_SIZE);
-	kunmap_atomic(src);
+	kunmap_local(src);
 
 	zram_slot_lock(zram, index);
 	zram_free_page(zram, index);
@@ -1818,7 +1824,7 @@ static int write_incompressible_page(struct zram *zram, struct page *page,
 	return 0;
 }
 
-static int zram_write_page(struct zram *zram, struct page *page, u32 index)
+static int zram_write_page(struct zram *zram, struct folio *folio, u32 index)
 {
 	int ret = 0;
 	unsigned int comp_len;
@@ -1827,9 +1833,9 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	unsigned long element;
 	bool same_filled;
 
-	mem = kmap_atomic(page);
+	mem = kmap_local_folio(folio, 0);
 	same_filled = page_same_filled(mem, &element);
-	kunmap_atomic(mem);
+	kunmap_local(mem);
 	if (same_filled)
 		return write_same_filled_page(zram, element, index);
 
@@ -1837,10 +1843,10 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 		return -ENOMEM;
 
 	zstrm = zcomp_cstrm_get(zram->comps[ZRAM_PRIMARY_COMP]);
-	mem = kmap_atomic(page);
+	mem = kmap_local_folio(folio, 0);
 	ret = zcomp_compress(zram->comps[ZRAM_PRIMARY_COMP], zstrm,
 			     mem, &comp_len);
-	kunmap_atomic(mem);
+	kunmap_local(mem);
 
 	if (unlikely(ret)) {
 		zcomp_cstrm_put(zstrm);
@@ -1850,7 +1856,7 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 
 	if (comp_len >= huge_class_size) {
 		zcomp_cstrm_put(zstrm);
-		return write_incompressible_page(zram, page, index);
+		return write_incompressible_page(zram, folio, index);
 	}
 
 	zram_slot_lock(zram, index);
@@ -1883,27 +1889,30 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 static int zram_bvec_write_partial(struct zram *zram, struct bio_vec *bvec,
 				   u32 index, int offset, struct bio *bio)
 {
-	struct page *page = alloc_page(GFP_NOIO);
+	struct folio *folio = folio_alloc(GFP_NOIO, 0);
 	int ret;
 
-	if (!page)
+	if (!folio)
 		return -ENOMEM;
 
-	ret = zram_read_page(zram, page, index, bio);
+	ret = zram_read_page(zram, folio, index, bio);
 	if (!ret) {
-		memcpy_from_bvec(page_address(page) + offset, bvec);
-		ret = zram_write_page(zram, page, index);
+		memcpy_from_bvec(folio_address(folio) + offset, bvec);
+		ret = zram_write_page(zram, folio, index);
 	}
-	__free_page(page);
+	folio_put(folio);
 	return ret;
 }
 
 static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec,
 			   u32 index, int offset, struct bio *bio)
 {
+	/* Block-layer boundary: convert incoming page to folio once. */
+	struct folio *folio = page_folio(bvec->bv_page);
+
 	if (is_partial_io(bvec))
 		return zram_bvec_write_partial(zram, bvec, index, offset, bio);
-	return zram_write_page(zram, bvec->bv_page, index);
+	return zram_write_page(zram, folio, index);
 }
 
 #ifdef CONFIG_ZRAM_MULTI_COMP
@@ -1957,7 +1966,7 @@ next:
  *
  * Corresponding ZRAM slot should be locked.
  */
-static int recompress_slot(struct zram *zram, u32 index, struct page *page,
+static int recompress_slot(struct zram *zram, u32 index, struct folio *folio,
 			   u64 *num_recomp_pages, u32 threshold, u32 prio,
 			   u32 prio_max)
 {
@@ -1981,7 +1990,7 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 	if (comp_len_old < threshold)
 		return 0;
 
-	ret = zram_read_from_zspool(zram, page, index);
+	ret = zram_read_from_zspool(zram, folio, index);
 	if (ret)
 		return ret;
 
@@ -2012,10 +2021,10 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 			continue;
 
 		zstrm = zcomp_cstrm_get(zram->comps[prio]);
-		src = kmap_atomic(page);
+		src = kmap_local_folio(folio, 0);
 		ret = zcomp_compress(zram->comps[prio], zstrm,
 				     src, &comp_len_new);
-		kunmap_atomic(src);
+		kunmap_local(src);
 
 		if (ret) {
 			zcomp_cstrm_put(zstrm);
@@ -2100,7 +2109,7 @@ static ssize_t recompress_store(struct device *dev,
 	struct zram_pp_slot *pps;
 	u32 mode = 0, threshold = 0;
 	u32 prio, prio_max;
-	struct page *page = NULL;
+	struct folio *folio = NULL;
 	ssize_t ret;
 
 	prio = ZRAM_SECONDARY_COMP;
@@ -2204,8 +2213,8 @@ static ssize_t recompress_store(struct device *dev,
 		goto release_init_lock;
 	}
 
-	page = alloc_page(GFP_KERNEL);
-	if (!page) {
+	folio = folio_alloc(GFP_KERNEL, 0);
+	if (!folio) {
 		ret = -ENOMEM;
 		goto release_init_lock;
 	}
@@ -2229,7 +2238,7 @@ static ssize_t recompress_store(struct device *dev,
 		if (!zram_test_flag(zram, pps->index, ZRAM_PP_SLOT))
 			goto next;
 
-		err = recompress_slot(zram, pps->index, page,
+		err = recompress_slot(zram, pps->index, folio,
 				      &num_recomp_pages, threshold,
 				      prio, prio_max);
 next:
@@ -2245,8 +2254,8 @@ next:
 	}
 
 release_init_lock:
-	if (page)
-		__free_page(page);
+	if (folio)
+		folio_put(folio);
 	release_pp_ctl(zram, ctl);
 	atomic_set(&zram->pp_in_progress, 0);
 	up_read(&zram->init_lock);
@@ -2310,7 +2319,7 @@ static void zram_bio_read(struct zram *zram, struct bio *bio)
 			bio->bi_status = BLK_STS_IOERR;
 			break;
 		}
-		flush_dcache_page(bv.bv_page);
+		flush_dcache_folio(page_folio(bv.bv_page));
 
 		zram_slot_lock(zram, index);
 		zram_accessed(zram, index);
