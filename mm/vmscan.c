@@ -21,6 +21,7 @@
 #include <linux/gfp.h>
 #include <linux/kernel_stat.h>
 #include <linux/swap.h>
+#include <linux/folio_compat.h>
 #include <linux/pagemap.h>
 #include <linux/init.h>
 #include <linux/highmem.h>
@@ -1074,15 +1075,15 @@ static bool lru_gen_set_refs(struct page *page, unsigned long vm_flags)
 }
 #endif /* CONFIG_LRU_GEN */
 
-static enum page_references page_check_references(struct page *page,
+static enum page_references page_check_references(struct folio *folio,
 						  struct scan_control *sc)
 {
 	int referenced_ptes, referenced_page;
 	unsigned long vm_flags;
 
-	referenced_ptes = page_referenced(page, 1, sc->target_mem_cgroup,
+	referenced_ptes = page_referenced(&folio->page, 1, sc->target_mem_cgroup,
 					  &vm_flags);
-	referenced_page = TestClearPageReferenced(page);
+	referenced_page = TestClearPageReferenced(&folio->page);
 
 	/*
 	 * Mlock lost the isolation race with us.  Let try_to_unmap()
@@ -1096,17 +1097,17 @@ static enum page_references page_check_references(struct page *page,
 		return PAGEREF_KEEP;
 
 	if (lru_gen_enabled() && !lru_gen_switching()) {
-		if (test_and_clear_bit(PG_willneed_hint, &page->flags))
+		if (test_and_clear_bit(PG_willneed_hint, &folio->page.flags))
 			return PAGEREF_ACTIVATE;
 
 		if (!referenced_ptes)
 			return PAGEREF_RECLAIM;
 
-		return lru_gen_set_refs(page, vm_flags) ? PAGEREF_ACTIVATE : PAGEREF_KEEP;
+		return lru_gen_set_refs(&folio->page, vm_flags) ? PAGEREF_ACTIVATE : PAGEREF_KEEP;
 	}
 
 	if (referenced_ptes) {
-		if (PageSwapBacked(page))
+		if (PageSwapBacked(&folio->page))
 			return PAGEREF_ACTIVATE;
 		/*
 		 * All mapped pages start out with page table
@@ -1122,7 +1123,7 @@ static enum page_references page_check_references(struct page *page,
 		 * so that recently deactivated but used pages are
 		 * quickly recovered.
 		 */
-		SetPageReferenced(page);
+		SetPageReferenced(&folio->page);
 
 		if (referenced_page || referenced_ptes > 1)
 			return PAGEREF_ACTIVATE;
@@ -1137,14 +1138,14 @@ static enum page_references page_check_references(struct page *page,
 	}
 
 	/* Reclaim if clean, defer dirty pages to writeback */
-	if (referenced_page && !PageSwapBacked(page))
+	if (referenced_page && !PageSwapBacked(&folio->page))
 		return PAGEREF_RECLAIM_CLEAN;
 
 	return PAGEREF_RECLAIM;
 }
 
 /* Check if a page is dirty or under writeback */
-static void page_check_dirty_writeback(struct page *page,
+static void page_check_dirty_writeback(struct folio *folio,
 				       bool *dirty, bool *writeback)
 {
 	struct address_space *mapping;
@@ -1153,24 +1154,24 @@ static void page_check_dirty_writeback(struct page *page,
 	 * Anonymous pages are not handled by flushers and must be written
 	 * from reclaim context. Do not stall reclaim based on them
 	 */
-	if (!page_is_file_cache(page) ||
-	    (PageAnon(page) && !PageSwapBacked(page))) {
+	if (!page_is_file_cache(&folio->page) ||
+	    (PageAnon(&folio->page) && !PageSwapBacked(&folio->page))) {
 		*dirty = false;
 		*writeback = false;
 		return;
 	}
 
 	/* By default assume that the page flags are accurate */
-	*dirty = PageDirty(page);
-	*writeback = PageWriteback(page);
+	*dirty = PageDirty(&folio->page);
+	*writeback = PageWriteback(&folio->page);
 
 	/* Verify dirty/writeback state if the filesystem supports it */
-	if (!page_has_private(page))
+	if (!page_has_private(&folio->page))
 		return;
 
-	mapping = page_mapping(page);
+	mapping = page_mapping(&folio->page);
 	if (mapping && mapping->a_ops->is_dirty_writeback)
-		mapping->a_ops->is_dirty_writeback(page, dirty, writeback);
+		mapping->a_ops->is_dirty_writeback(&folio->page, dirty, writeback);
 }
 
 /*
@@ -1201,14 +1202,16 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	while (!list_empty(page_list)) {
 		struct address_space *mapping;
 		struct page *page;
+		struct folio *folio;
 		int may_enter_fs;
 		enum page_references references = PAGEREF_RECLAIM;
 		bool dirty, writeback;
 
 		cond_resched();
 
-		page = lru_to_page(page_list);
-		list_del(&page->lru);
+		folio = lru_to_folio(page_list);
+		page = folio_page(folio, 0);
+		list_del(&folio->page.lru);
 
 		if (!trylock_page(page))
 			goto keep;
@@ -1242,7 +1245,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * will stall and start writing pages if the tail of the LRU
 		 * is all dirty unqueued pages.
 		 */
-		page_check_dirty_writeback(page, &dirty, &writeback);
+		page_check_dirty_writeback(folio, &dirty, &writeback);
 		if (dirty || writeback)
 			nr_dirty++;
 
@@ -1334,13 +1337,13 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				unlock_page(page);
 				wait_on_page_writeback(page);
 				/* then go back and try same page again */
-				list_add_tail(&page->lru, page_list);
+				list_add_tail(&folio->page.lru, page_list);
 				continue;
 			}
 		}
 
 		if (!force_reclaim)
-			references = page_check_references(page, sc);
+			references = page_check_references(folio, sc);
 
 		switch (references) {
 		case PAGEREF_ACTIVATE:
@@ -1376,7 +1379,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 								    page_list))
 						goto activate_locked;
 				}
-				if (!add_to_swap(page)) {
+				if (!add_to_swap(&folio->page)) {
 					if (!PageTransHuge(page))
 						goto activate_locked;
 					/* Fallback to swap normal pages */
@@ -1386,7 +1389,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 					count_vm_event(THP_SWPOUT_FALLBACK);
 #endif
-					if (!add_to_swap(page))
+					if (!add_to_swap(&folio->page))
 						goto activate_locked;
 				}
 
@@ -1535,7 +1538,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 
 			count_vm_event(PGLAZYFREED);
-			count_memcg_page_event(page, PGLAZYFREED);
+			folio_count_memcg_event(folio, PGLAZYFREED);
 		} else if (!mapping || !__remove_mapping(mapping, page, true))
 			goto keep_locked;
 
@@ -1548,27 +1551,27 @@ free_it:
 		 * appear not as the counts should be low
 		 */
 		if (unlikely(PageTransHuge(page))) {
-			mem_cgroup_uncharge(page);
+			folio_memcg_uncharge(folio);
 			(*get_compound_page_dtor(page))(page);
 		} else
-			list_add(&page->lru, &free_pages);
+			list_add(&folio->page.lru, &free_pages);
 		continue;
 
 activate_locked:
 		/* Not a candidate for swapping, so reclaim swap space. */
-		if (PageSwapCache(page) && (mem_cgroup_swap_full(page) ||
+		if (PageSwapCache(page) && (mem_cgroup_swap_full(&folio->page) ||
 						PageMlocked(page)))
-			try_to_free_swap(page);
+			try_to_free_swap(&folio->page);
 		VM_BUG_ON_PAGE(PageActive(page), page);
 		if (!PageMlocked(page)) {
 			SetPageActive(page);
 			pgactivate++;
-			count_memcg_page_event(page, PGACTIVATE);
+			folio_count_memcg_event(folio, PGACTIVATE);
 		}
 keep_locked:
 		unlock_page(page);
 keep:
-		list_add(&page->lru, &ret_pages);
+		list_add(&folio->page.lru, &ret_pages);
 		VM_BUG_ON_PAGE(PageLRU(page) || PageUnevictable(page), page);
 	}
 
@@ -1779,15 +1782,17 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 	     scan < nr_to_scan && nr_taken < nr_to_scan && !list_empty(src);
 	     total_scan++) {
 		struct page *page;
+		struct folio *folio;
 
-		page = lru_to_page(src);
+		folio = lru_to_folio(src);
+		page = folio_page(folio, 0);
 		prefetchw_prev_lru_page(page, src, flags);
 
-		VM_BUG_ON_PAGE(!PageLRU(page), page);
+		VM_BUG_ON_PAGE(!PageLRU(&folio->page), &folio->page);
 
-		if (page_zonenum(page) > sc->reclaim_idx) {
-			list_move(&page->lru, &pages_skipped);
-			nr_skipped[page_zonenum(page)]++;
+		if (page_zonenum(&folio->page) > sc->reclaim_idx) {
+			list_move(&folio->page.lru, &pages_skipped);
+			nr_skipped[page_zonenum(&folio->page)]++;
 			continue;
 		}
 
@@ -1800,15 +1805,15 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		scan++;
 		switch (__isolate_lru_page(page, mode)) {
 		case 0:
-			nr_pages = hpage_nr_pages(page);
+			nr_pages = hpage_nr_pages(&folio->page);
 			nr_taken += nr_pages;
-			nr_zone_taken[page_zonenum(page)] += nr_pages;
-			list_move(&page->lru, dst);
+			nr_zone_taken[page_zonenum(&folio->page)] += nr_pages;
+			list_move(&folio->page.lru, dst);
 			break;
 
 		case -EBUSY:
 			/* else it is being freed elsewhere */
-			list_move(&page->lru, src);
+			list_move(&folio->page.lru, src);
 			continue;
 
 		default:

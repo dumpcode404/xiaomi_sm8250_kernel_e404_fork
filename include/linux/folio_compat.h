@@ -122,6 +122,23 @@ static inline void folio_add_lru_anon(struct folio *folio)
 }
 
 /*
+ * LRU-list extraction as folio: struct folio is layout-compatible with
+ * struct page at offset 0, so &folio->page.lru links folios on the same
+ * LRU lists that used to hold pages.
+ */
+static inline struct folio *lru_to_folio(struct list_head *head)
+{
+	return list_entry((head)->prev, struct folio, page.lru);
+}
+
+/* memcg accounting for a folio-tracked page. */
+static inline void folio_count_memcg_event(struct folio *folio,
+					   enum vm_event_item idx)
+{
+	count_memcg_page_event(&folio->page, idx);
+}
+
+/*
  * XArray-folio API: 6.6 looks swap/page cache slots up as folios.
  * find_get_page() performs the XArray lookup under RCU (xa_load path)
  * and returns the resident page with a ref held (NULL for miss or for
