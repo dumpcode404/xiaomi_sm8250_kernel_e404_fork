@@ -146,6 +146,17 @@ static inline void folio_count_memcg_event(struct folio *folio,
  * xa_lock-protected stores/erases stay at the converted call sites in
  * mm/swap_state.c, where the xas locking discipline is preserved.
  */
+/*
+ * Insertion path as folio: thin bridge over add_to_page_cache_lru(),
+ * whose struct page * signature stays until VFS-side callers convert.
+ */
+static inline int filemap_add_folio(struct folio *folio,
+				    struct address_space *mapping,
+				    pgoff_t index, gfp_t gfp_mask)
+{
+	return add_to_page_cache_lru(&folio->page, mapping, index, gfp_mask);
+}
+
 static inline struct folio *filemap_get_folio(struct address_space *mapping,
 					      pgoff_t index)
 {

@@ -33,6 +33,7 @@
 #include <linux/cpuset.h>
 #include <linux/hugetlb.h>
 #include <linux/memcontrol.h>
+#include <linux/folio_compat.h>
 #include <linux/cleancache.h>
 #include <linux/shmem_fs.h>
 #include <linux/rmap.h>
@@ -841,38 +842,38 @@ int replace_page_cache_page(struct page *old, struct page *new, gfp_t gfp_mask)
 }
 EXPORT_SYMBOL_GPL(replace_page_cache_page);
 
-static int __add_to_page_cache_locked(struct page *page,
+static int __add_to_page_cache_locked(struct folio *folio,
 				      struct address_space *mapping,
 				      pgoff_t offset, gfp_t gfp_mask,
 				      void **shadowp)
 {
 	XA_STATE(xas, &mapping->i_pages, offset);
-	int huge = PageHuge(page);
+	int huge = PageHuge(&folio->page);
 	struct mem_cgroup *memcg;
 	int error;
 	void *old;
 
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE(PageSwapBacked(page), page);
+	VM_BUG_ON_PAGE(!PageLocked(&folio->page), &folio->page);
+	VM_BUG_ON_PAGE(PageSwapBacked(&folio->page), &folio->page);
 	mapping_set_update(&xas, mapping);
 
 	if (!huge) {
-		error = mem_cgroup_try_charge(page, current->mm,
-					      gfp_mask, &memcg, false);
+		error = folio_memcg_try_charge(folio, current->mm,
+					       gfp_mask, &memcg, false);
 		if (error)
 			return error;
 	}
 
-	get_page(page);
-	page->mapping = mapping;
-	page->index = offset;
+	get_page(&folio->page);
+	folio->page.mapping = mapping;
+	folio->page.index = offset;
 
 	do {
 		xas_lock_irq(&xas);
 		old = xas_load(&xas);
 		if (old && !xa_is_value(old))
 			xas_set_err(&xas, -EEXIST);
-		xas_store(&xas, page);
+		xas_store(&xas, &folio->page);
 		if (xas_error(&xas))
 			goto unlock;
 
@@ -885,7 +886,7 @@ static int __add_to_page_cache_locked(struct page *page,
 
 		/* hugetlb pages do not participate in page cache accounting */
 		if (!huge)
-			__inc_node_page_state(page, NR_FILE_PAGES);
+			__inc_node_page_state(&folio->page, NR_FILE_PAGES);
 unlock:
 		xas_unlock_irq(&xas);
 	} while (xas_nomem(&xas, gfp_mask & GFP_RECLAIM_MASK));
@@ -894,15 +895,15 @@ unlock:
 		goto error;
 
 	if (!huge)
-		mem_cgroup_commit_charge(page, memcg, false, false);
-	trace_mm_filemap_add_to_page_cache(page);
+		folio_memcg_commit_charge(folio, memcg, false, false);
+	trace_mm_filemap_add_to_page_cache(&folio->page);
 	return 0;
 error:
-	page->mapping = NULL;
-	/* Leave page->index set: truncation relies upon it */
+	folio->page.mapping = NULL;
+	/* Leave folio->page.index set: truncation relies upon it */
 	if (!huge)
-		mem_cgroup_cancel_charge(page, memcg, false);
-	put_page(page);
+		folio_memcg_cancel_charge(folio, memcg, false);
+	folio_put(folio);
 	return xas_error(&xas);
 }
 
@@ -921,7 +922,8 @@ error:
 int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 		pgoff_t offset, gfp_t gfp_mask)
 {
-	return __add_to_page_cache_locked(page, mapping, offset,
+	/* External gate: VFS/filesystem callers still pass struct page *. */
+	return __add_to_page_cache_locked(page_folio(page), mapping, offset,
 					  gfp_mask, NULL);
 }
 EXPORT_SYMBOL(add_to_page_cache_locked);
@@ -929,14 +931,16 @@ EXPORT_SYMBOL(add_to_page_cache_locked);
 int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 				pgoff_t offset, gfp_t gfp_mask)
 {
+	/* External gate: convert to folio once for the internal path. */
+	struct folio *folio = page_folio(page);
 	void *shadow = NULL;
 	int ret;
 
-	__SetPageLocked(page);
-	ret = __add_to_page_cache_locked(page, mapping, offset,
+	__SetPageLocked(&folio->page);
+	ret = __add_to_page_cache_locked(folio, mapping, offset,
 					 gfp_mask, &shadow);
 	if (unlikely(ret))
-		__ClearPageLocked(page);
+		__ClearPageLocked(&folio->page);
 	else {
 		/*
 		 * The page might have been evicted from cache only
@@ -946,10 +950,10 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 		 * data from the working set, only to cache data that will
 		 * get overwritten with something else, is a waste of memory.
 		 */
-		WARN_ON_ONCE(PageActive(page));
+		WARN_ON_ONCE(PageActive(&folio->page));
 		if (!(gfp_mask & __GFP_WRITE) && shadow)
-			workingset_refault(page, shadow);
-		lru_cache_add(page);
+			workingset_refault(&folio->page, shadow);
+		folio_add_lru(folio);
 	}
 	return ret;
 }
@@ -1629,6 +1633,7 @@ struct page *pagecache_get_page(struct address_space *mapping, pgoff_t offset,
 	int fgp_flags, gfp_t gfp_mask)
 {
 	struct page *page;
+	struct folio *folio;
 
 repeat:
 	page = find_get_entry(mapping, offset);
@@ -1657,7 +1662,7 @@ repeat:
 	}
 
 	if (page && (fgp_flags & FGP_ACCESSED))
-		mark_page_accessed(page);
+		folio_mark_accessed(page_folio(page));
 
 no_page:
 	if (!page && (fgp_flags & FGP_CREAT)) {
@@ -1670,6 +1675,8 @@ no_page:
 		page = __page_cache_alloc(gfp_mask);
 		if (!page)
 			return NULL;
+		/* Allocated page enters the cache as a folio from here. */
+		folio = page_folio(page);
 
 		if (WARN_ON_ONCE(!(fgp_flags & (FGP_LOCK | FGP_FOR_MMAP))))
 			fgp_flags |= FGP_LOCK;
@@ -1678,9 +1685,9 @@ no_page:
 		if (fgp_flags & FGP_ACCESSED)
 			__SetPageReferenced(page);
 
-		err = add_to_page_cache_lru(page, mapping, offset, gfp_mask);
+		err = filemap_add_folio(folio, mapping, offset, gfp_mask);
 		if (unlikely(err)) {
-			put_page(page);
+			folio_put(folio);
 			page = NULL;
 			if (err == -EEXIST)
 				goto repeat;
@@ -2131,6 +2138,7 @@ static ssize_t generic_file_buffered_read(struct kiocb *iocb,
 
 	for (;;) {
 		struct page *page;
+		struct folio *folio;
 		pgoff_t end_index;
 		loff_t isize;
 		unsigned long nr, ret;
@@ -2142,14 +2150,16 @@ find_page:
 			goto out;
 		}
 
-		page = find_get_page(mapping, index);
+		folio = filemap_get_folio(mapping, index);
+		page = folio ? folio_page(folio, 0) : NULL;
 		if (!page) {
 			if (iocb->ki_flags & IOCB_NOWAIT)
 				goto would_block;
 			page_cache_sync_readahead(mapping,
 					ra, filp,
 					index, last_index - index);
-			page = find_get_page(mapping, index);
+			folio = filemap_get_folio(mapping, index);
+			page = folio ? folio_page(folio, 0) : NULL;
 			if (unlikely(page == NULL))
 				goto no_cached_page;
 		}
@@ -2160,7 +2170,7 @@ find_page:
 		}
 		if (!PageUptodate(page)) {
 			if (iocb->ki_flags & IOCB_NOWAIT) {
-				put_page(page);
+				folio_put(folio);
 				goto would_block;
 			}
 
@@ -2204,7 +2214,7 @@ page_ok:
 		isize = i_size_read(inode);
 		end_index = (isize - 1) >> PAGE_SHIFT;
 		if (unlikely(!isize || index > end_index)) {
-			put_page(page);
+			folio_put(folio);
 			goto out;
 		}
 
@@ -2213,7 +2223,7 @@ page_ok:
 		if (index == end_index) {
 			nr = ((isize - 1) & ~PAGE_MASK) + 1;
 			if (nr <= offset) {
-				put_page(page);
+				folio_put(folio);
 				goto out;
 			}
 		}
@@ -2224,14 +2234,14 @@ page_ok:
 		 * before reading the page on the kernel side.
 		 */
 		if (mapping_writably_mapped(mapping))
-			flush_dcache_page(page);
+			flush_dcache_folio(folio);
 
 		/*
 		 * When a sequential read accesses a page several times,
 		 * only mark it as accessed the first time.
 		 */
 		if (prev_index != index || offset != prev_offset)
-			mark_page_accessed(page);
+			folio_mark_accessed(folio);
 		prev_index = index;
 
 		/*
@@ -2245,7 +2255,7 @@ page_ok:
 		offset &= ~PAGE_MASK;
 		prev_offset = offset;
 
-		put_page(page);
+		folio_put(folio);
 		written += ret;
 		if (!iov_iter_count(iter))
 			goto out;
@@ -2265,7 +2275,7 @@ page_not_up_to_date_locked:
 		/* Did it get truncated before we got the lock? */
 		if (!page->mapping) {
 			unlock_page(page);
-			put_page(page);
+			folio_put(folio);
 			continue;
 		}
 
@@ -2287,7 +2297,7 @@ readpage:
 
 		if (unlikely(error)) {
 			if (error == AOP_TRUNCATED_PAGE) {
-				put_page(page);
+				folio_put(folio);
 				error = 0;
 				goto find_page;
 			}
@@ -2304,7 +2314,7 @@ readpage:
 					 * invalidate_mapping_pages got it
 					 */
 					unlock_page(page);
-					put_page(page);
+					folio_put(folio);
 					goto find_page;
 				}
 				unlock_page(page);
@@ -2319,7 +2329,7 @@ readpage:
 
 readpage_error:
 		/* UHHUH! A synchronous read error occurred. Report it */
-		put_page(page);
+		folio_put(folio);
 		goto out;
 
 no_cached_page:
@@ -2335,7 +2345,7 @@ no_cached_page:
 		error = add_to_page_cache_lru(page, mapping, index,
 				mapping_gfp_constraint(mapping, GFP_KERNEL));
 		if (error) {
-			put_page(page);
+			folio_put(folio);
 			if (error == -EEXIST) {
 				error = 0;
 				goto find_page;
@@ -2584,6 +2594,7 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	pgoff_t offset = vmf->pgoff;
 	pgoff_t max_off;
 	struct page *page;
+	struct folio *folio;
 	vm_fault_t ret = 0;
 
 	max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
@@ -2593,7 +2604,8 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	/*
 	 * Do we have something in the page cache already?
 	 */
-	page = find_get_page(mapping, offset);
+	folio = filemap_get_folio(mapping, offset);
+	page = folio ? folio_page(folio, 0) : NULL;
 	if (likely(page) && !(vmf->flags & FAULT_FLAG_TRIED)) {
 		/*
 		 * We found the page, so try async readahead before
@@ -2866,16 +2878,19 @@ static struct page *do_read_cache_page(struct address_space *mapping,
 				gfp_t gfp)
 {
 	struct page *page;
+	struct folio *folio;
 	int err;
 repeat:
-	page = find_get_page(mapping, index);
+	folio = filemap_get_folio(mapping, index);
+	page = folio ? folio_page(folio, 0) : NULL;
 	if (!page) {
 		page = __page_cache_alloc(gfp);
 		if (!page)
 			return ERR_PTR(-ENOMEM);
-		err = add_to_page_cache_lru(page, mapping, index, gfp);
+		folio = page_folio(page);
+		err = filemap_add_folio(folio, mapping, index, gfp);
 		if (unlikely(err)) {
-			put_page(page);
+			folio_put(folio);
 			if (err == -EEXIST)
 				goto repeat;
 			/* Presumably ENOMEM for xarray node */
@@ -3204,6 +3219,7 @@ ssize_t generic_perform_write(struct file *file,
 
 	do {
 		struct page *page;
+		struct folio *folio;
 		unsigned long offset;	/* Offset into pagecache page */
 		unsigned long bytes;	/* Bytes to write to page */
 		size_t copied;		/* Bytes copied from user */
@@ -3239,11 +3255,14 @@ again:
 		if (unlikely(status < 0))
 			break;
 
+		/* VFS boundary: filesystem hands us a struct page *. */
+		folio = page_folio(page);
+
 		if (mapping_writably_mapped(mapping))
-			flush_dcache_page(page);
+			flush_dcache_folio(folio);
 
 		copied = iov_iter_copy_from_user_atomic(page, i, offset, bytes);
-		flush_dcache_page(page);
+		flush_dcache_folio(folio);
 
 		status = a_ops->write_end(file, mapping, pos, bytes, copied,
 						page, fsdata);
