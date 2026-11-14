@@ -404,6 +404,20 @@ static inline struct sched_entity *parent_entity(struct sched_entity *se)
 	return se->parent;
 }
 
+static inline int cfs_rq_is_idle(struct cfs_rq *cfs_rq)
+{
+	/* Fallback: Cgroup SCHED_IDLE not implemented */
+	return 0;
+}
+
+static inline int se_is_idle(struct sched_entity *se)
+{
+	/* Only individual tasks can be SCHED_IDLE, not cgroups */
+	if (entity_is_task(se))
+		return task_has_idle_policy(task_of(se));
+	return 0;
+}
+
 static void
 find_matching_se(struct sched_entity **se, struct sched_entity **pse)
 {
@@ -484,6 +498,16 @@ static inline void assert_list_leaf_cfs_rq(struct rq *rq)
 static inline struct sched_entity *parent_entity(struct sched_entity *se)
 {
 	return NULL;
+}
+
+static inline int cfs_rq_is_idle(struct cfs_rq *cfs_rq)
+{
+	return 0;
+}
+
+static inline int se_is_idle(struct sched_entity *se)
+{
+	return 0;
 }
 
 static inline void
