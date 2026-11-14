@@ -6547,8 +6547,6 @@ requeue_delayed_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	WARN_ON_ONCE(!se->sched_delayed);
 	WARN_ON_ONCE(!se->on_rq);
 
-	update_curr(cfs_rq);
-
 	if (update_entity_lag(cfs_rq, se)) {
 		cfs_rq->h_nr_queued--;
 		if (se != cfs_rq->curr)
@@ -6767,7 +6765,7 @@ static bool __dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 
 	clear_buddies(cfs_rq, se);
 
-	update_curr(cfs_rq_of(se));
+	update_curr_eevdf(cfs_rq);
 	update_entity_lag(cfs_rq, se);
 
 	if (flags & DEQUEUE_DELAYED) {
