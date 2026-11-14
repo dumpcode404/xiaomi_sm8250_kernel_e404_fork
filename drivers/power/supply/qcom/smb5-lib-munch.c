@@ -12052,7 +12052,8 @@ static void smblib_chg_termination_work(struct work_struct *work)
 		if (rc < 0)
 			goto out;
 
-		vbat_now_uv = pval.intval;
+		/* Keep vbat_now_uv as VOLTAGE_NOW; pval now carries
+		 * CC_SOC/prop for the jump and overshoot checks below. */
 		rc = smblib_get_prop_from_bms(chg, prop, &pval);
 		if (rc < 0)
 			goto out;
