@@ -227,7 +227,7 @@ ___update_load_sum(u64 now, struct sched_avg *sa,
 	/*
 	 * running is a subset of runnable (weight) so running can't be set if
 	 * runnable is clear. But there are some corner cases where the current
-	 * se has been already dequeued but cfs_rq->curr still points to it.
+	 * se has been already dequeued but cfs_rq->h_curr still points to it.
 	 * This means that weight will be 0 but not running for a sched_entity
 	 * but also for a cfs_rq if the latter becomes idle. As an example,
 	 * this happens during idle_balance() which calls
