@@ -484,7 +484,7 @@ static inline int cfs_rq_is_idle(struct cfs_rq *cfs_rq)
 
 static inline int se_is_idle(struct sched_entity *se)
 {
-	return 0;
+	return task_has_idle_policy(task_of(se));
 }
 
 #endif	/* CONFIG_FAIR_GROUP_SCHED */
