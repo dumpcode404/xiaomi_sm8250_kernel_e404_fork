@@ -8893,7 +8893,7 @@ again:
 
 	/* Might not have done put_prev_entity() */
 	if (cfs_rq->curr && cfs_rq->curr->on_rq)
-		update_curr(cfs_rq);
+		update_curr_eevdf(cfs_rq);
 
 	throttled |= check_cfs_rq_runtime(cfs_rq);
 
@@ -9013,7 +9013,7 @@ static void yield_task_fair(struct rq *rq)
 	/*
 	 * Update run-time statistics of the 'current'.
 	 */
-	update_curr(cfs_rq);
+	update_curr_eevdf(cfs_rq);
 	/*
 	 * Tell update_rq_clock() that we've just updated,
 	 * so we don't do microscopic update in schedule()
