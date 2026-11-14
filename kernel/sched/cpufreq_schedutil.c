@@ -376,8 +376,6 @@ static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
 static unsigned long sugov_iowait_apply(struct sugov_cpu *sg_cpu, u64 time,
 			       unsigned long max_cap)
 {
-	unsigned long boost;
-
 	/* No boost currently required */
 	if (!sg_cpu->iowait_boost)
 		return 0;
@@ -401,11 +399,9 @@ static unsigned long sugov_iowait_apply(struct sugov_cpu *sg_cpu, u64 time,
 
 	/*
 	 * sg_cpu->util is already in capacity scale; convert iowait_boost
-	 * into the same scale so we can compare. Clamp the result to the
-	 * rq's uclamp constraints so the IO boost cannot escape them.
+	 * into the same scale so we can compare.
 	 */
-	boost = (sg_cpu->iowait_boost * max_cap) >> SCHED_CAPACITY_SHIFT;
-	return uclamp_rq_util_with(cpu_rq(sg_cpu->cpu), boost, NULL);
+	return (sg_cpu->iowait_boost * max_cap) >> SCHED_CAPACITY_SHIFT;
 }
 
 /*
