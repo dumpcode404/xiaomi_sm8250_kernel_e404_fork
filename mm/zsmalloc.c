@@ -1490,7 +1490,7 @@ static void obj_free(int class_size, unsigned long obj)
 	void *vaddr;
 
 	obj_to_location(obj, &f_page, &f_objidx);
-	f_offset = offset_in_page(class_size * f_objidx);
+	f_offset = offset_in_page((unsigned long)class_size * f_objidx);
 	zspage = get_zspage(f_page);
 
 	vaddr = kmap_atomic(f_page);
