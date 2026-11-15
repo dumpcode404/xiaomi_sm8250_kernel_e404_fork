@@ -3208,12 +3208,10 @@ static int page_update_gen(struct page *page, int gen, int *type, unsigned long 
 	return ((old_flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
 }
 
-static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaiming)
+static int __page_inc_gen(struct page *page, int old_gen, bool reclaiming, bool *increased)
 {
 	unsigned long new_flags, old_flags;
-	int type = page_is_file_cache(page);
-	struct lru_gen_struct *lrugen = &lruvec->lrugen;
-	int new_gen, old_gen = lru_gen_from_seq(lrugen->min_seq[type]);
+	int new_gen;
 
 	do {
 		old_flags = READ_ONCE(page->flags);
@@ -3222,8 +3220,11 @@ static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaimin
 
 		new_gen = ((old_flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
 		/* page_update_gen() has promoted this page? */
-		if (new_gen >= 0 && new_gen != old_gen)
+		if (new_gen >= 0 && new_gen != old_gen) {
+			if (increased)
+				*increased = false;
 			return new_gen;
+		}
 
 		new_gen = (old_gen + 1) % MAX_NR_GENS;
 
@@ -3234,7 +3235,22 @@ static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaimin
 			new_flags |= BIT(PG_reclaim);
 	} while (cmpxchg(&page->flags, old_flags, new_flags) != old_flags);
 
-	lru_gen_update_size(lruvec, page, old_gen, new_gen);
+	if (increased)
+		*increased = true;
+
+	return new_gen;
+}
+
+static int page_inc_gen(struct lruvec *lruvec, struct page *page, bool reclaiming)
+{
+	int type = page_is_file_cache(page);
+	struct lru_gen_struct *lrugen = &lruvec->lrugen;
+	int new_gen, old_gen = lru_gen_from_seq(lrugen->min_seq[type]);
+	bool gen_increased;
+
+	new_gen = __page_inc_gen(page, old_gen, reclaiming, &gen_increased);
+	if (gen_increased)
+		lru_gen_update_size(lruvec, page, old_gen, new_gen);
 
 	return new_gen;
 }
