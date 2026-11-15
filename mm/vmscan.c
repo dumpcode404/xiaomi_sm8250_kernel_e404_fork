@@ -4322,6 +4322,7 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, struct scan_cont
 		       int tier_idx)
 {
 	bool success;
+	bool dirty, writeback;
 	int gen = page_lru_gen(page);
 	int type = page_is_file_cache(page);
 	int zone = page_zonenum(page);
@@ -4369,8 +4370,16 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, struct scan_cont
 	}
 
 	/* waiting for writeback */
-	if (PageLocked(page) || PageWriteback(page) ||
-	    (type == LRU_GEN_FILE && PageDirty(page))) {
+	dirty = PageDirty(page);
+	writeback = PageWriteback(page);
+	if (type == LRU_GEN_FILE && dirty) {
+		sc->nr.file_taken += delta;
+		if (!writeback)
+			sc->nr.unqueued_dirty += delta;
+	}
+
+	if (PageLocked(page) || writeback ||
+	    (type == LRU_GEN_FILE && dirty)) {
 		gen = page_inc_gen(lruvec, page, true);
 		list_move(&page->lru, &lrugen->lists[gen][type][zone]);
 		return true;
@@ -4485,6 +4494,8 @@ static int scan_pages(struct lruvec *lruvec, struct scan_control *sc,
 	__count_memcg_events(memcg, item, isolated);
 	__count_memcg_events(memcg, PGREFILL, sorted);
 
+	if (type == LRU_GEN_FILE)
+		sc->nr.file_taken += isolated;
 	/*
 	 * There might not be eligible pages due to reclaim_idx, may_unmap and
 	 * may_writepage. Check the remaining to prevent livelock if there is no
@@ -4601,6 +4612,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	bool skip_retry = false;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+	struct reclaim_stat stat = {0};
 
 	spin_lock_irq(&pgdat->lru_lock);
 
@@ -4623,7 +4635,8 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	if (nr_isolated)
 		mod_node_page_state(pgdat, NR_ISOLATED_ANON + type, nr_isolated);
 retry:
-	reclaimed = shrink_page_list(&list, pgdat, sc, 0, NULL, false);
+	reclaimed = shrink_page_list(&list, pgdat, sc, 0, &stat, false);
+	sc->nr.unqueued_dirty += stat.nr_unqueued_dirty;
 	sc->nr_reclaimed += reclaimed;
 
 	list_for_each_entry_safe_reverse(page, next, &list, lru) {
@@ -4815,6 +4828,13 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 
 		cond_resched();
 	}
+
+	/*
+	 * If too many file cache in the coldest generation can't be evicted
+	 * due to being dirty, wake up the flusher.
+	 */
+	if (sc->nr.unqueued_dirty && sc->nr.unqueued_dirty == sc->nr.file_taken)
+		wakeup_flusher_threads(WB_REASON_VMSCAN);
 
 	if (sc->nr_reclaimed - reclaimed >= MIN_LRU_BATCH && !need_aging)
 		sc->memcgs_need_aging = false;
