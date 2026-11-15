@@ -1461,11 +1461,11 @@ bool blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 		 * status to not miss rerunning hw queue.
 		 * Upstream 542c1c1b4cca.
 		 */
-		spin_lock_irqsave(&hctx->queue->queue_lock, flags);
+		spin_lock_irqsave(hctx->queue->queue_lock, flags);
 		hctx_lock(hctx, &srcu_idx);
 		need_run = blk_mq_hw_queue_need_run(hctx);
 		hctx_unlock(hctx, srcu_idx);
-		spin_unlock_irqrestore(&hctx->queue->queue_lock, flags);
+		spin_unlock_irqrestore(hctx->queue->queue_lock, flags);
 
 		if (!need_run)
 			return false;
@@ -1570,6 +1570,11 @@ void blk_mq_start_stopped_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 		return;
 
 	clear_bit(BLK_MQ_S_STOPPED, &hctx->state);
+	/*
+	 * Pairs with smp_mb in blk_mq_hctx_stopped to order clearing
+	 * STOPPED and dispatch-list check.
+	 */
+	smp_mb__after_atomic();
 	blk_mq_run_hw_queue(hctx, async);
 }
 EXPORT_SYMBOL_GPL(blk_mq_start_stopped_hw_queue);

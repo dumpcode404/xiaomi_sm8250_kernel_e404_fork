@@ -142,6 +142,17 @@ static inline struct blk_mq_tags *blk_mq_tags_from_data(struct blk_mq_alloc_data
 
 static inline bool blk_mq_hctx_stopped(struct blk_mq_hw_ctx *hctx)
 {
+	/* Fast path: hardware queue is not stopped most of the time. */
+	if (likely(!test_bit(BLK_MQ_S_STOPPED, &hctx->state)))
+		return false;
+
+	/*
+	 * Barrier to order dispatch-list add before STOPPED test.
+	 * Pairs with smp_mb__after_atomic in start_stopped so dispatch
+	 * either sees cleared STOPPED or list non-empty. Upstream 1936f2e69812.
+	 */
+	smp_mb();
+
 	return test_bit(BLK_MQ_S_STOPPED, &hctx->state);
 }
 
