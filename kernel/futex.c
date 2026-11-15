@@ -1370,6 +1370,21 @@ static int attach_to_pi_owner(u32 __user *uaddr, u32 uval, union futex_key *key,
 	}
 
 	/*
+	 * Private futex key borrows waiter mm without ref. Reject cross-mm
+	 * owner to avoid UAF via exit_pi_state_list using freed private hash.
+	 * Check under pi_lock after state validation to serialize vs exit.
+	 * CVE-2026-80778: 2b92e55/43b148d/59b3732/f7fb3e07 backports, same fix.
+	 */
+	if (IS_ENABLED(CONFIG_MMU) &&
+	    !(key->both.offset & (FUT_OFF_INODE | FUT_OFF_MMSHARED))) {
+		if (unlikely(p->mm != key->private.mm)) {
+			raw_spin_unlock_irq(&p->pi_lock);
+			put_task_struct(p);
+			return -EPERM;
+		}
+	}
+
+	/*
 	 * No existing pi state. First waiter. [2]
 	 *
 	 * This creates pi_state, we have hb->lock held, this means nothing can
