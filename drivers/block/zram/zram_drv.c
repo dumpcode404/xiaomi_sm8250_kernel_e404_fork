@@ -2552,8 +2552,149 @@ static void zram_destroy_comps(struct zram *zram)
 	zram_comp_params_reset(zram);
 }
 
+#ifdef CONFIG_ZRAM_MULTI_COMP
+#define ZRAM_AUTO_RECOMP_DEFAULT_SECS 300
+#define ZRAM_AUTO_RECOMP_MAX_PER_CYCLE 512
+
+static void zram_auto_recomp_work(struct work_struct *work)
+{
+	struct zram *zram = container_of(to_delayed_work(work),
+					struct zram, auto_recomp_work);
+	unsigned long nr_pages, index;
+	unsigned int interval;
+	struct folio *folio = NULL;
+	unsigned int recomped = 0, scanned = 0;
+
+	interval = READ_ONCE(zram->auto_recomp_interval);
+	if (!interval)
+		return;
+
+	/* Avoid blocking teardown; retry shortly if init lock busy. */
+	if (!down_read_trylock(&zram->init_lock)) {
+		queue_delayed_work(system_power_efficient_wq,
+				   &zram->auto_recomp_work, 10 * HZ);
+		return;
+	}
+
+	if (!init_done(zram) || !zram->disksize) {
+		up_read(&zram->init_lock);
+		goto resched;
+	}
+
+	if (zram->num_active_comps <= ZRAM_SECONDARY_COMP) {
+		up_read(&zram->init_lock);
+		goto resched;
+	}
+
+	folio = folio_alloc(GFP_KERNEL, 0);
+	if (!folio) {
+		up_read(&zram->init_lock);
+		goto resched;
+	}
+
+	nr_pages = zram->disksize >> PAGE_SHIFT;
+	for (index = 0; index < nr_pages; index++) {
+		bool do_recomp = false;
+
+		/* Slot lock is sleepable bit-lock, owner may sleep. */
+		zram_slot_lock(zram, index);
+		if (!zram_allocated(zram, index))
+			goto next_unlock;
+
+		if (zram_test_flag(zram, index, ZRAM_WB) ||
+		    zram_test_flag(zram, index, ZRAM_SAME) ||
+		    zram_test_flag(zram, index, ZRAM_INCOMPRESSIBLE))
+			goto next_unlock;
+
+		/* Skip already-recompressed beyond primary. */
+		if (zram_get_priority(zram, index) != ZRAM_PRIMARY_COMP)
+			goto next_unlock;
+
+		if (!zram_test_flag(zram, index, ZRAM_IDLE)) {
+			/* First sighting: age for next cycle. */
+			zram_set_flag(zram, index, ZRAM_IDLE);
+			goto next_unlock;
+		}
+
+		/* Second consecutive cycle idle: recompress to secondary.
+		 * recompress_slot() expects slot locked and init_lock held,
+		 * clears IDLE on touch. Cap per cycle to bound read-hold. */
+		do_recomp = true;
+next_unlock:
+		if (!do_recomp) {
+			zram_slot_unlock(zram, index);
+		} else {
+			u64 nr = 1;
+			int err;
+
+			/* Keep slot locked across recompress_slot per contract. */
+			err = recompress_slot(zram, index, folio, &nr, 0,
+					      ZRAM_SECONDARY_COMP,
+					      (u32)zram->num_active_comps);
+			zram_slot_unlock(zram, index);
+			if (!err)
+				recomped++;
+			if (recomped >= ZRAM_AUTO_RECOMP_MAX_PER_CYCLE) {
+				cond_resched();
+				break;
+			}
+		}
+
+		if ((++scanned & 127) == 0)
+			cond_resched();
+	}
+
+	if (folio)
+		folio_put(folio);
+	up_read(&zram->init_lock);
+
+resched:
+	interval = READ_ONCE(zram->auto_recomp_interval);
+	if (interval)
+		queue_delayed_work(system_power_efficient_wq,
+				   &zram->auto_recomp_work,
+				   interval * HZ);
+}
+
+static ssize_t recomp_interval_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct zram *zram = dev_to_zram(dev);
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(zram->auto_recomp_interval));
+}
+
+static ssize_t recomp_interval_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t len)
+{
+	struct zram *zram = dev_to_zram(dev);
+	unsigned int val;
+	int err;
+
+	err = kstrtouint(buf, 10, &val);
+	if (err)
+		return err;
+
+	WRITE_ONCE(zram->auto_recomp_interval, val);
+
+	/* Process context sysfs; sync cancel then reschedule if enabled. */
+	cancel_delayed_work_sync(&zram->auto_recomp_work);
+	if (val)
+		queue_delayed_work(system_power_efficient_wq,
+				   &zram->auto_recomp_work, val * HZ);
+
+	return len;
+}
+#endif
+
 static void zram_reset_device(struct zram *zram)
 {
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/* Process-context teardown; stop periodic work synchronously before
+	 * taking write lock so worker trylock never blocks reset. */
+	cancel_delayed_work_sync(&zram->auto_recomp_work);
+#endif
 	down_write(&zram->init_lock);
 
 	zram->limit_pages = 0;
@@ -2618,6 +2759,15 @@ static ssize_t disksize_store(struct device *dev,
 	zram->disksize = disksize;
 	set_capacity_and_notify(zram->disk, zram->disksize >> SECTOR_SHIFT);
 	up_write(&zram->init_lock);
+
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/* Kick initial auto-recompression cycle if enabled. Process context,
+	 * system_power_efficient_wq is non-wakeup. */
+	if (zram->auto_recomp_interval)
+		queue_delayed_work(system_power_efficient_wq,
+				   &zram->auto_recomp_work,
+				   zram->auto_recomp_interval * HZ);
+#endif
 
 	return len;
 
@@ -2712,6 +2862,7 @@ static DEVICE_ATTR_RW(writeback_limit_enable);
 #ifdef CONFIG_ZRAM_MULTI_COMP
 static DEVICE_ATTR_RW(recomp_algorithm);
 static DEVICE_ATTR_WO(recompress);
+static DEVICE_ATTR_RW(recomp_interval);
 #endif
 static DEVICE_ATTR_WO(algorithm_params);
 
@@ -2740,6 +2891,7 @@ static struct attribute *zram_disk_attrs[] = {
 #ifdef CONFIG_ZRAM_MULTI_COMP
 	&dev_attr_recomp_algorithm.attr,
 	&dev_attr_recompress.attr,
+	&dev_attr_recomp_interval.attr,
 #endif
 	&dev_attr_algorithm_params.attr,
 	NULL,
