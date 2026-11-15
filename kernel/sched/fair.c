@@ -5241,10 +5241,15 @@ static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq);
 
 static void set_delayed(struct sched_entity *se)
 {
-	/* Only tasks can be delayed. */
-	WARN_ON_ONCE(!entity_is_task(se));
-
 	se->sched_delayed = 1;
+
+	/*
+	 * Delayed se of cfs_rq have no tasks queued on them.
+	 * Do not adjust h_nr_runnable since __dequeue_task()
+	 * will account it for blocked tasks.
+	 */
+	if (!entity_is_task(se))
+		return;
 
 	for_each_sched_entity(se) {
 		struct cfs_rq *cfs_rq = cfs_rq_of(se);
@@ -5253,16 +5258,18 @@ static void set_delayed(struct sched_entity *se)
 	}
 }
 
-static void __clear_delayed(struct sched_entity *se)
-{
-	/* Only tasks can be delayed. */
-	WARN_ON_ONCE(!entity_is_task(se));
-	se->sched_delayed = 0;
-}
-
 static void clear_delayed(struct sched_entity *se)
 {
-	__clear_delayed(se);
+	se->sched_delayed = 0;
+
+	/*
+	 * Delayed se of cfs_rq have no tasks queued on them.
+	 * Do not adjust h_nr_runnable since a dequeue has
+	 * already accounted for it or an enqueue of a task
+	 * below it will account for it in enqueue_task_fair().
+	 */
+	if (!entity_is_task(se))
+		return;
 
 	for_each_sched_entity(se) {
 		struct cfs_rq *cfs_rq = cfs_rq_of(se);
@@ -6713,13 +6720,14 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 static void dequeue_hierarchy(struct task_struct *p, int flags)
 {
 	struct sched_entity *se = &p->se;
+	bool task_sleep = flags & DEQUEUE_SLEEP;
+	bool task_delayed = flags & DEQUEUE_DELAYED;
+	int h_nr_runnable = 0;
 	int h_nr_idle = task_has_idle_policy(p);
-	int h_nr_runnable = 1;
 	bool dequeue = true;
 
-	/* Already accounted via set_delayed(). */
-	if (se->sched_delayed)
-		h_nr_runnable = 0;
+	if (task_sleep || task_delayed || !se->sched_delayed)
+		h_nr_runnable = 1;
 
 	for_each_sched_entity(se) {
 		struct cfs_rq *cfs_rq = cfs_rq_of(se);
@@ -6806,11 +6814,7 @@ static bool __dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 		rq->next_balance = jiffies;
 
 	if (task_delayed) {
-		/*
-		 * Skip accounting since set_delayed() has already
-		 * adjusted it. Just clear se->sched_delayed.
-		 */
-		__clear_delayed(se);
+		clear_delayed(se);
 
 		WARN_ON_ONCE(!task_sleep);
 		WARN_ON_ONCE(p->on_rq != 1);
