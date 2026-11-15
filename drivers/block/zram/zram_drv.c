@@ -2213,14 +2213,11 @@ static ssize_t recompress_store(struct device *dev,
 	struct zram_pp_ctl *ctl = NULL;
 	struct zram_pp_slot *pps;
 	u32 mode = 0, threshold = 0;
-	u32 prio, prio_max;
+	u32 prio = ZRAM_SECONDARY_COMP, prio_max = ZRAM_MAX_COMPS;
 	struct folio *folio = NULL;
 	ssize_t ret;
 
-	prio = ZRAM_SECONDARY_COMP;
-	prio_max = zram->num_active_comps;
-
-	args = skip_spaces(buf);
+	args = skip_spaces((char *)buf);
 	while (*args) {
 		args = next_arg(args, &param, &val);
 
@@ -2273,10 +2270,7 @@ static ssize_t recompress_store(struct device *dev,
 			if (ret)
 				return ret;
 
-			if (prio == ZRAM_PRIMARY_COMP)
-				prio = ZRAM_SECONDARY_COMP;
-
-			prio_max = prio + 1;
+			prio_max = min(prio + 1, ZRAM_MAX_COMPS);
 			continue;
 		}
 	}
@@ -2304,7 +2298,7 @@ static ssize_t recompress_store(struct device *dev,
 				continue;
 
 			if (!strcmp(zram->comp_algs[prio], algo)) {
-				prio_max = prio + 1;
+				prio_max = min(prio + 1, ZRAM_MAX_COMPS);
 				found = true;
 				break;
 			}
@@ -2314,6 +2308,11 @@ static ssize_t recompress_store(struct device *dev,
 			ret = -EINVAL;
 			goto release_init_lock;
 		}
+	}
+
+	if (prio < ZRAM_SECONDARY_COMP || prio >= ZRAM_MAX_COMPS) {
+		ret = -EINVAL;
+		goto release_init_lock;
 	}
 
 	prio_max = min(prio_max, (u32)zram->num_active_comps);
