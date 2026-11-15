@@ -593,7 +593,7 @@ static void reset_bdev(struct zram *zram)
 		return;
 
 	bdev = zram->bdev;
-	blkdev_put(bdev, zram);
+	blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
 	/* hope filp_close flush all of IO */
 	filp_close(zram->backing_dev, NULL);
 	zram->backing_dev = NULL;
@@ -680,8 +680,9 @@ static ssize_t backing_dev_store(struct device *dev,
 		goto out;
 	}
 
-	bdev = blkdev_get_by_dev(inode->i_rdev, BLK_OPEN_READ | BLK_OPEN_WRITE,
-				 zram, NULL);
+	bdev = blkdev_get_by_dev(inode->i_rdev,
+				 FMODE_READ | FMODE_WRITE | FMODE_EXCL,
+				 zram);
 	if (IS_ERR(bdev)) {
 		err = PTR_ERR(bdev);
 		bdev = NULL;
@@ -718,7 +719,7 @@ out:
 	kvfree(bitmap);
 
 	if (bdev)
-		blkdev_put(bdev, zram);
+		blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
 
 	if (backing_dev)
 		filp_close(backing_dev, NULL);
@@ -760,7 +761,9 @@ static void read_from_bdev_async(struct zram *zram, struct page *page,
 {
 	struct bio *bio;
 
-	bio = bio_alloc(zram->bdev, 1, parent->bi_opf, GFP_NOIO);
+	bio = bio_alloc(GFP_NOIO, 1);
+	bio->bi_bdev = zram->bdev;
+	bio->bi_opf = parent->bi_opf;
 	bio->bi_iter.bi_sector = entry * (PAGE_SIZE >> 9);
 	__bio_add_page(bio, page, PAGE_SIZE, 0);
 	bio_chain(bio, parent);
@@ -913,8 +916,9 @@ static int zram_writeback_slots(struct zram *zram, struct zram_pp_ctl *ctl)
 			goto next;
 		zram_slot_unlock(zram, index);
 
-		bio_init(&bio, zram->bdev, &bio_vec, 1,
-			 REQ_OP_WRITE | REQ_SYNC);
+		bio_init(&bio, &bio_vec, 1);
+		bio.bi_bdev = zram->bdev;
+		bio.bi_opf = REQ_OP_WRITE | REQ_SYNC;
 		bio.bi_iter.bi_sector = blk_idx * (PAGE_SIZE >> 9);
 		__bio_add_page(&bio, folio_page(folio, 0), PAGE_SIZE, 0);
 
@@ -1090,7 +1094,9 @@ static void zram_sync_read(struct work_struct *work)
 	struct bio_vec bv;
 	struct bio bio;
 
-	bio_init(&bio, zw->zram->bdev, &bv, 1, REQ_OP_READ);
+	bio_init(&bio, &bv, 1);
+	bio.bi_bdev = zw->zram->bdev;
+	bio.bi_opf = REQ_OP_READ;
 	bio.bi_iter.bi_sector = zw->entry * (PAGE_SIZE >> 9);
 	__bio_add_page(&bio, zw->page, PAGE_SIZE, 0);
 	zw->error = submit_bio_wait(&bio);
