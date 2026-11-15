@@ -146,6 +146,9 @@ struct zram {
 	/* In-kernel auto-recompression (non-wakeup, power-efficient wq). */
 	struct delayed_work auto_recomp_work;
 	unsigned int auto_recomp_interval; /* seconds, 0 disables */
+#ifdef CONFIG_PM_SLEEP
+	struct notifier_block pm_nb;
+#endif
 #endif
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;

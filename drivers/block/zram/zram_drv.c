@@ -33,6 +33,7 @@
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
 #include <linux/percpu.h>
+#include <linux/suspend.h>
 
 #include "zram_drv.h"
 
@@ -2679,6 +2680,33 @@ resched:
 				   interval * HZ);
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int zram_auto_recomp_pm_notify(struct notifier_block *nb,
+				      unsigned long action, void *data)
+{
+	struct zram *zram = container_of(nb, struct zram, pm_nb);
+
+	if (action == PM_SUSPEND_PREPARE) {
+		/* Process context: stop worker cleanly before sleep so no
+		 * delayed work fires together with keyguard swap-in. */
+		cancel_delayed_work_sync(&zram->auto_recomp_work);
+	} else if (action == PM_POST_SUSPEND) {
+		unsigned int interval = READ_ONCE(zram->auto_recomp_interval);
+
+		/* Cooldown: keep first 30s after wakeup worker-free. */
+		if (interval && init_done(zram)) {
+			unsigned int delay =
+				max_t(unsigned int, interval, 30);
+
+			mod_delayed_work(system_power_efficient_wq,
+					 &zram->auto_recomp_work,
+					 msecs_to_jiffies(delay * 1000U));
+		}
+	}
+	return NOTIFY_OK;
+}
+#endif
+
 static ssize_t recomp_interval_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
@@ -2986,6 +3014,11 @@ static int zram_add(void)
 	 * disksize_store/init; see recomp_interval_store. */
 	zram->auto_recomp_interval = ZRAM_AUTO_RECOMP_DEFAULT_SECS;
 	INIT_DELAYED_WORK(&zram->auto_recomp_work, zram_auto_recomp_work);
+#ifdef CONFIG_PM_SLEEP
+	zram->pm_nb.notifier_call = zram_auto_recomp_pm_notify;
+	if (register_pm_notifier(&zram->pm_nb))
+		pr_warn("zram: failed to register pm notifier\n");
+#endif
 #endif
 
 	/* Actual capacity set using sysfs (/sys/block/zram<id>/disksize */
@@ -3084,6 +3117,11 @@ static int zram_remove(struct zram *zram)
 	 * anything allocated with disksize_store()
 	 */
 	zram_reset_device(zram);
+
+#ifdef CONFIG_PM_SLEEP
+	/* Process context teardown; no suspend/resume can requeue after this. */
+	unregister_pm_notifier(&zram->pm_nb);
+#endif
 
 	put_disk(zram->disk);
 	kfree(zram);
