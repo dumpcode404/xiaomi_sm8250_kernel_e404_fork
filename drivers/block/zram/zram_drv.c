@@ -2574,8 +2574,8 @@ static void zram_register_default_recomp(struct zram *zram)
 			CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, r);
 }
 
-#define ZRAM_AUTO_RECOMP_DEFAULT_SECS 300
-#define ZRAM_AUTO_RECOMP_MAX_PER_CYCLE 512
+#define ZRAM_AUTO_RECOMP_DEFAULT_SECS 120
+#define ZRAM_AUTO_RECOMP_MAX_PER_CYCLE 4096
 
 static void zram_auto_recomp_work(struct work_struct *work)
 {
@@ -2661,7 +2661,9 @@ next_unlock:
 			}
 		}
 
-		if ((++scanned & 127) == 0)
+		/* Yield every 64 slots so foreground UI stays responsive.
+		 * No slot lock or preempt_disable held here. */
+		if ((++scanned & 63) == 0)
 			cond_resched();
 	}
 
@@ -2980,9 +2982,9 @@ static int zram_add(void)
 	/* Auto-register secondary before userspace sees device (disksize==0).
 	 * Helper takes write lock itself; init_lock is free here. */
 	zram_register_default_recomp(zram);
-	/* Default 300s auto-recompression, 0 disables. Work queued on
+	/* Default auto-recompression interval (0 disables). Work queued on
 	 * disksize_store/init; see recomp_interval_store. */
-	zram->auto_recomp_interval = 300;
+	zram->auto_recomp_interval = ZRAM_AUTO_RECOMP_DEFAULT_SECS;
 	INIT_DELAYED_WORK(&zram->auto_recomp_work, zram_auto_recomp_work);
 #endif
 
