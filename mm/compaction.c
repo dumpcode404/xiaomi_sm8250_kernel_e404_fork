@@ -2142,6 +2142,24 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 	INIT_LIST_HEAD(&cc->migratepages);
 
 	cc->migratetype = gfpflags_to_migratetype(cc->gfp_mask);
+	/*
+	 * For unmovable costly async allocations (without ALLOC_CMA), check
+	 * non-CMA watermarks. Otherwise compaction could form high-order in
+	 * CMA pageblocks which won't help allocation, causing endless
+	 * COMPACT_CONTINUE in slowpath (VM start with passthrough slow).
+	 * Upstream 6268f0a166eb, adapted to 4.19 __compaction_suitable shape.
+	 * Limited to costly async to allow non-CMA->CMA migration fallback.
+	 */
+	if (cc->order > PAGE_ALLOC_COSTLY_ORDER && cc->mode == MIGRATE_ASYNC &&
+	    !(cc->alloc_flags & ALLOC_CMA)) {
+		unsigned long watermark = low_wmark_pages(cc->zone) +
+					  compact_gap(cc->order);
+
+		if (!__zone_watermark_ok(cc->zone, 0, watermark,
+					 cc->classzone_idx, 0,
+					 zone_page_state(cc->zone, NR_FREE_PAGES)))
+			return COMPACT_SKIPPED;
+	}
 	ret = compaction_suitable(cc->zone, cc->order, cc->alloc_flags,
 							cc->classzone_idx);
 	/* Compaction is likely to fail */
