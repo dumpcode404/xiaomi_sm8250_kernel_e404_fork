@@ -142,6 +142,11 @@ struct zram {
 	/* Scratch handle for recompression; kept outside MULTI_COMP
 	 * because this tree runs recompression on the primary comp. */
 	struct zs_handle recomp_handle;
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/* In-kernel auto-recompression (non-wakeup, power-efficient wq). */
+	struct delayed_work auto_recomp_work;
+	unsigned int auto_recomp_interval; /* seconds, 0 disables */
+#endif
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif

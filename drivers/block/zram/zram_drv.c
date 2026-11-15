@@ -45,6 +45,10 @@ static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
 
 #define ZRAM_MAX_ALGO_NAME_SZ	128
 
+#ifdef CONFIG_ZRAM_MULTI_COMP
+static void zram_auto_recomp_work(struct work_struct *work);
+#endif
+
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
 /*
@@ -2794,6 +2798,23 @@ static int zram_add(void)
 	atomic_set(&zram->pp_in_progress, 0);
 	zram_comp_params_reset(zram);
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/* Auto-register secondary compressor before userspace sees device
+	 * (disksize==0, init not done). Skip if same as primary to avoid
+	 * duplicate. Process context, init_lock free, safe for __comp call
+	 * which takes write lock internally. */
+	if (strcmp(CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, default_compressor) != 0) {
+		int r = __comp_algorithm_store(zram, ZRAM_SECONDARY_COMP,
+					       CONFIG_ZRAM_DEFAULT_RECOMP_ALGO);
+		if (r)
+			pr_info("zram: default recomp %s not available: %d\n",
+				CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, r);
+	}
+	/* Default 300s auto-recompression, 0 disables. Work queued on
+	 * disksize_store/init; see recomp_interval_store. */
+	zram->auto_recomp_interval = 300;
+	INIT_DELAYED_WORK(&zram->auto_recomp_work, zram_auto_recomp_work);
+#endif
 
 	/* Actual capacity set using sysfs (/sys/block/zram<id>/disksize */
 	set_capacity(zram->disk, 0);
