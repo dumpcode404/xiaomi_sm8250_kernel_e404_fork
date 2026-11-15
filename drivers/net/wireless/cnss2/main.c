@@ -2310,7 +2310,7 @@ static ssize_t recovery_store(struct device *dev,
 	if (!plat_priv)
 		return -ENODEV;
 
-	if (sscanf(buf, "%du", &recovery) != 1) {
+	if (sscanf(buf, "%u", &recovery) != 1) {
 		cnss_pr_err("Invalid recovery sysfs command\n");
 		return -EINVAL;
 	}
