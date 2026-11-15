@@ -136,3 +136,12 @@ config ZRAM_MULTI_COMP
 	  re-compress pages using a potentially slower but more effective
 	  compression algorithm. Note, that IDLE page recompression
 	  requires ZRAM_MEMORY_TRACKING.
+
+config ZRAM_DEFAULT_RECOMP_ALGO
+	string "Default secondary (recompression) algorithm"
+	depends on ZRAM_MULTI_COMP
+	default "zstd" if ZRAM_MULTI_COMP
+	help
+	  Secondary compressor auto-registered at device add time when it
+	  differs from the primary compressor, so idle recompression is
+	  ready before swapon without userspace writes to recomp_algorithm.
