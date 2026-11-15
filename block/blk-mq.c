@@ -1426,30 +1426,53 @@ void blk_mq_delay_run_hw_queue(struct blk_mq_hw_ctx *hctx, unsigned long msecs)
 }
 EXPORT_SYMBOL(blk_mq_delay_run_hw_queue);
 
-bool blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
+static inline bool blk_mq_hw_queue_need_run(struct blk_mq_hw_ctx *hctx)
 {
-	int srcu_idx;
 	bool need_run;
 
 	/*
 	 * When queue is quiesced, we may be switching io scheduler, or
 	 * updating nr_hw_queues, or other things, and we can't run queue
-	 * any more, even __blk_mq_hctx_has_pending() can't be called safely.
+	 * any more, even blk_mq_hctx_has_pending() can't be called safely.
 	 *
 	 * And queue will be rerun in blk_mq_unquiesce_queue() if it is
 	 * quiesced.
 	 */
-	hctx_lock(hctx, &srcu_idx);
 	need_run = !blk_queue_quiesced(hctx->queue) &&
 		blk_mq_hctx_has_pending(hctx);
+	return need_run;
+}
+
+bool blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
+{
+	int srcu_idx;
+	bool need_run;
+
+	hctx_lock(hctx, &srcu_idx);
+	need_run = blk_mq_hw_queue_need_run(hctx);
 	hctx_unlock(hctx, srcu_idx);
 
-	if (need_run) {
-		__blk_mq_delay_run_hw_queue(hctx, async, 0);
-		return true;
+	if (!need_run) {
+		unsigned long flags;
+
+		/*
+		 * Synchronize with blk_mq_unquiesce_queue(), because we check
+		 * quiesced locklessly above, use queue_lock to see up-to-date
+		 * status to not miss rerunning hw queue.
+		 * Upstream 542c1c1b4cca.
+		 */
+		spin_lock_irqsave(&hctx->queue->queue_lock, flags);
+		hctx_lock(hctx, &srcu_idx);
+		need_run = blk_mq_hw_queue_need_run(hctx);
+		hctx_unlock(hctx, srcu_idx);
+		spin_unlock_irqrestore(&hctx->queue->queue_lock, flags);
+
+		if (!need_run)
+			return false;
 	}
 
-	return false;
+	__blk_mq_delay_run_hw_queue(hctx, async, 0);
+	return true;
 }
 EXPORT_SYMBOL(blk_mq_run_hw_queue);
 
