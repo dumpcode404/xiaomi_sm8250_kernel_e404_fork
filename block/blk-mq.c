@@ -1794,6 +1794,15 @@ insert:
 		return BLK_STS_RESOURCE;
 
 	blk_mq_request_bypass_insert(rq, run_queue);
+	/*
+	 * Upstream 4bddfec1a0fb: when queue was stopped/quiesced at entry
+	 * (run_queue==false), concurrent un-stop/unquiesce may have made
+	 * it runnable after bypass_insert. Run explicitly to avoid stranded
+	 * dispatch (UFS stop/start, clk-gate). Run is a no-op if still
+	 * stopped/quiesced.
+	 */
+	if (!run_queue)
+		blk_mq_run_hw_queue(hctx, false);
 	return BLK_STS_OK;
 }
 
