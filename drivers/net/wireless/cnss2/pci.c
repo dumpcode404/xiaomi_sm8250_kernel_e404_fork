@@ -879,7 +879,8 @@ int cnss_pci_recover_link_down(struct cnss_pci_data *pci_priv)
 	ret = cnss_resume_pci_link(pci_priv);
 	if (ret) {
 		cnss_pr_err("Failed to resume PCI link, err = %d\n", ret);
-		del_timer(&pci_priv->dev_rddm_timer);
+		/* Process context (msleep above), sync vs rddm timeout handler. */
+		del_timer_sync(&pci_priv->dev_rddm_timer);
 		return ret;
 	}
 
@@ -2189,7 +2190,9 @@ static int cnss_qca6290_shutdown(struct cnss_pci_data *pci_priv)
 	     test_bit(CNSS_DRIVER_IDLE_SHUTDOWN, &plat_priv->driver_state) ||
 	     test_bit(CNSS_COLD_BOOT_CAL, &plat_priv->driver_state)) &&
 	    test_bit(CNSS_DEV_ERR_NOTIFY, &plat_priv->driver_state)) {
-		del_timer(&pci_priv->dev_rddm_timer);
+		/* Power-down path, process context, sync vs timeout handler.
+		 * MHI notify callbacks (atomic) intentionally keep del_timer. */
+		del_timer_sync(&pci_priv->dev_rddm_timer);
 		cnss_pci_collect_dump(pci_priv);
 	}
 
@@ -5043,7 +5046,8 @@ static void cnss_pci_remove(struct pci_dev *pci_dev)
 		cnss_pci_unregister_mhi(pci_priv);
 		cnss_pci_disable_msi(pci_priv);
 		complete_all(&pci_priv->wake_event);
-		del_timer(&pci_priv->dev_rddm_timer);
+		/* Remove path, process context, sync vs timeout handler. */
+		del_timer_sync(&pci_priv->dev_rddm_timer);
 		break;
 	default:
 		break;

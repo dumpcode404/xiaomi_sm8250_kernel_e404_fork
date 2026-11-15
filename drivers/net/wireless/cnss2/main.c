@@ -451,7 +451,8 @@ static int cnss_fw_ready_hdlr(struct cnss_plat_data *plat_priv)
 	if (!plat_priv)
 		return -ENODEV;
 
-	del_timer(&plat_priv->fw_boot_timer);
+	/* Process context (event work), safe to sync vs timeout handler. */
+	del_timer_sync(&plat_priv->fw_boot_timer);
 	set_bit(CNSS_FW_READY, &plat_priv->driver_state);
 	clear_bit(CNSS_DEV_ERR_NOTIFY, &plat_priv->driver_state);
 
@@ -724,7 +725,8 @@ int cnss_idle_restart(struct device *dev)
 
 	if (test_bit(CNSS_IN_REBOOT, &plat_priv->driver_state)) {
 		cnss_pr_dbg("Reboot or shutdown is in progress, ignore idle restart\n");
-		del_timer(&plat_priv->fw_boot_timer);
+		/* Process context, sync vs timeout handler. */
+		del_timer_sync(&plat_priv->fw_boot_timer);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -2332,7 +2334,8 @@ static ssize_t shutdown_store(struct device *dev,
 
 	if (plat_priv) {
 		set_bit(CNSS_IN_REBOOT, &plat_priv->driver_state);
-		del_timer(&plat_priv->fw_boot_timer);
+		/* sysfs store, process context, sync vs timeout handler. */
+		del_timer_sync(&plat_priv->fw_boot_timer);
 		complete_all(&plat_priv->power_up_complete);
 		complete_all(&plat_priv->cal_complete);
 	}
@@ -2566,7 +2569,8 @@ static void cnss_misc_deinit(struct cnss_plat_data *plat_priv)
 	device_init_wakeup(&plat_priv->plat_dev->dev, false);
 	unregister_reboot_notifier(&plat_priv->reboot_nb);
 	unregister_pm_notifier(&cnss_pm_notifier);
-	del_timer(&plat_priv->fw_boot_timer);
+	/* misc_deinit runs in remove (process context), sync safe. */
+	del_timer_sync(&plat_priv->fw_boot_timer);
 }
 
 static void cnss_init_control_params(struct cnss_plat_data *plat_priv)
