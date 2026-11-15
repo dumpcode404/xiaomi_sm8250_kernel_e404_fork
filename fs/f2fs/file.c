@@ -982,6 +982,8 @@ int f2fs_setattr(struct dentry *dentry, struct iattr *attr)
 				return err;
 		}
 
+		inode_dio_wait(inode);
+
 		f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		f2fs_down_write(&F2FS_I(inode)->i_mmap_sem);
 
@@ -1811,6 +1813,7 @@ static long f2fs_fallocate(struct file *file, int mode,
 		if (offset >= inode->i_size)
 			goto out;
 
+		inode_dio_wait(inode);
 		ret = punch_hole(inode, offset, len);
 	} else if (mode & FALLOC_FL_COLLAPSE_RANGE) {
 		ret = f2fs_collapse_range(inode, offset, len);
