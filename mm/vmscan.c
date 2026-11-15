@@ -3795,6 +3795,19 @@ static void clear_mm_walk(void)
 		kfree(walk);
 }
 
+static inline void flush_lru_batch(struct list_head *head, struct list_head **batch_end,
+				   struct list_head *dst)
+{
+	LIST_HEAD(movable);
+
+	if (!*batch_end)
+		return;
+
+	list_cut_position(&movable, head, *batch_end);
+	list_splice_tail_init(&movable, dst);
+	*batch_end = NULL;
+}
+
 static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 {
 	int zone;
@@ -3809,15 +3822,19 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 	VM_WARN_ON_ONCE(get_nr_gens(lruvec, type) != MAX_NR_GENS);
 	/* prevent cold/hot inversion if force_scan is true */
 	for (zone = 0; zone < MAX_NR_ZONES; zone++) {
+		struct list_head *target_list = &lrugen->lists[target_gen][type][zone];
 		struct list_head *head = &lrugen->lists[old_gen][type][zone];
+		struct list_head *pos = head->next;
+		struct list_head *batch_end = NULL;
 		long delta = 0;
 
-		while (!list_empty(head)) {
-			struct page *page = lru_to_page(head);
+		while (pos != head) {
+			struct page *page = list_entry(pos, struct page, lru);
 			long nr_pages = hpage_nr_pages(page);
 			int refs = page_lru_refs(page);
-			bool workingset = PageWorkingset(page);
 			bool gen_increased;
+
+			pos = pos->next;
 
 			VM_WARN_ON_ONCE_PAGE(PageUnevictable(page), page);
 			VM_WARN_ON_ONCE_PAGE(PageActive(page), page);
@@ -3835,23 +3852,26 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 			 * e90113a8e0e8; struct-page lists, no folios here.
 			 */
 			if (gen_increased) {
-				list_move_tail(&page->lru, &lrugen->lists[new_gen][type][zone]);
+				batch_end = &page->lru;
 				delta += nr_pages;
 				/* don't count the workingset being lazily promoted */
-				if (refs + workingset != BIT(LRU_REFS_WIDTH) + 1) {
-					int tier = lru_tier_from_refs(refs, workingset);
+				if (refs != BIT(LRU_REFS_WIDTH) + 1) {
+					int tier = lru_tier_from_refs(refs);
 					int hist = lru_hist_from_seq(lrugen->min_seq[type]);
 
-					WRITE_ONCE(lrugen->protected[hist][type][tier],
-						   lrugen->protected[hist][type][tier] + nr_pages);
+					if (tier > 0)
+						WRITE_ONCE(lrugen->protected[hist][type][tier - 1],
+							   lrugen->protected[hist][type][tier - 1] + nr_pages);
 				}
 			} else {
+				flush_lru_batch(head, &batch_end, target_list);
 				list_move(&page->lru, &lrugen->lists[new_gen][type][zone]);
 			}
 
 			if (!--remaining)
 				break;
 		}
+		flush_lru_batch(head, &batch_end, target_list);
 		WRITE_ONCE(lrugen->nr_pages[old_gen][type][zone],
 			   lrugen->nr_pages[old_gen][type][zone] - delta);
 		WRITE_ONCE(lrugen->nr_pages[target_gen][type][zone],
