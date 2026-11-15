@@ -3433,7 +3433,7 @@ int cnss_pci_alloc_fw_mem(struct cnss_pci_data *pci_priv)
 			if (!fw_mem[i].va) {
 				cnss_pr_err("Failed to allocate memory for FW, size: 0x%zx, type: %u\n",
 					    fw_mem[i].size, fw_mem[i].type);
-				BUG();
+				return -ENOMEM;
 			}
 		}
 	}
@@ -5052,6 +5052,9 @@ static void cnss_pci_remove(struct pci_dev *pci_dev)
 		complete_all(&pci_priv->wake_event);
 		/* Remove path, process context, sync vs timeout handler. */
 		del_timer_sync(&pci_priv->dev_rddm_timer);
+		/* Cancel periodic work synchronously; handler self-reschedules.
+		 * Process context remove path, safe to sync. */
+		cancel_delayed_work_sync(&pci_priv->time_sync_work);
 		break;
 	default:
 		break;
