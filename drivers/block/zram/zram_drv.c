@@ -2553,6 +2553,27 @@ static void zram_destroy_comps(struct zram *zram)
 }
 
 #ifdef CONFIG_ZRAM_MULTI_COMP
+/*
+ * Register CONFIG_ZRAM_DEFAULT_RECOMP_ALGO to SECONDARY slot when it differs
+ * from primary and slot is empty (respect manual user selection).
+ * Caller must NOT hold init_lock (takes write lock via __comp store).
+ */
+static void zram_register_default_recomp(struct zram *zram)
+{
+	int r;
+
+	if (strcmp(CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, default_compressor) == 0)
+		return;
+	if (zram->comp_algs[ZRAM_SECONDARY_COMP])
+		return;
+
+	r = __comp_algorithm_store(zram, ZRAM_SECONDARY_COMP,
+				   CONFIG_ZRAM_DEFAULT_RECOMP_ALGO);
+	if (r)
+		pr_info("zram: default recomp %s not available: %d\n",
+			CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, r);
+}
+
 #define ZRAM_AUTO_RECOMP_DEFAULT_SECS 300
 #define ZRAM_AUTO_RECOMP_MAX_PER_CYCLE 512
 
@@ -2712,6 +2733,11 @@ static void zram_reset_device(struct zram *zram)
 
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 	up_write(&zram->init_lock);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/* Re-register secondary after reset (Android init does reset before
+	 * disksize). Lock is free here; helper validates !init_done itself. */
+	zram_register_default_recomp(zram);
+#endif
 }
 
 static ssize_t disksize_store(struct device *dev,
@@ -2951,17 +2977,9 @@ static int zram_add(void)
 	zram_comp_params_reset(zram);
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 #ifdef CONFIG_ZRAM_MULTI_COMP
-	/* Auto-register secondary compressor before userspace sees device
-	 * (disksize==0, init not done). Skip if same as primary to avoid
-	 * duplicate. Process context, init_lock free, safe for __comp call
-	 * which takes write lock internally. */
-	if (strcmp(CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, default_compressor) != 0) {
-		int r = __comp_algorithm_store(zram, ZRAM_SECONDARY_COMP,
-					       CONFIG_ZRAM_DEFAULT_RECOMP_ALGO);
-		if (r)
-			pr_info("zram: default recomp %s not available: %d\n",
-				CONFIG_ZRAM_DEFAULT_RECOMP_ALGO, r);
-	}
+	/* Auto-register secondary before userspace sees device (disksize==0).
+	 * Helper takes write lock itself; init_lock is free here. */
+	zram_register_default_recomp(zram);
 	/* Default 300s auto-recompression, 0 disables. Work queued on
 	 * disksize_store/init; see recomp_interval_store. */
 	zram->auto_recomp_interval = 300;
