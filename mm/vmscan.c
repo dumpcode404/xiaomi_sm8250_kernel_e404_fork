@@ -3801,23 +3801,30 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 	int remaining = MAX_LRU_BATCH;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 	int new_gen, old_gen = lru_gen_from_seq(lrugen->min_seq[type]);
+	int target_gen = (old_gen + 1) % MAX_NR_GENS;
 
 	if (type == LRU_GEN_ANON && !can_swap)
 		goto done;
 
+	VM_WARN_ON_ONCE(get_nr_gens(lruvec, type) != MAX_NR_GENS);
 	/* prevent cold/hot inversion if force_scan is true */
 	for (zone = 0; zone < MAX_NR_ZONES; zone++) {
 		struct list_head *head = &lrugen->lists[old_gen][type][zone];
+		long delta = 0;
 
 		while (!list_empty(head)) {
 			struct page *page = lru_to_page(head);
+			long nr_pages = hpage_nr_pages(page);
+			int refs = page_lru_refs(page);
+			bool workingset = PageWorkingset(page);
+			bool gen_increased;
 
 			VM_WARN_ON_ONCE_PAGE(PageUnevictable(page), page);
 			VM_WARN_ON_ONCE_PAGE(PageActive(page), page);
 			VM_WARN_ON_ONCE_PAGE(page_is_file_cache(page) != type, page);
 			VM_WARN_ON_ONCE_PAGE(page_zonenum(page) != zone, page);
 
-			new_gen = page_inc_gen(lruvec, page, false);
+			new_gen = __page_inc_gen(page, old_gen, false, &gen_increased);
 			/*
 			 * If the generation did not advance, this is a
 			 * promotion of a hot page -- keep it at the head
@@ -3827,14 +3834,30 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 			 * second-oldest generation. Backport of mainline
 			 * e90113a8e0e8; struct-page lists, no folios here.
 			 */
-			if (new_gen == old_gen)
-				list_move(&page->lru, &lrugen->lists[new_gen][type][zone]);
-			else
+			if (gen_increased) {
 				list_move_tail(&page->lru, &lrugen->lists[new_gen][type][zone]);
+				delta += nr_pages;
+				/* don't count the workingset being lazily promoted */
+				if (refs + workingset != BIT(LRU_REFS_WIDTH) + 1) {
+					int tier = lru_tier_from_refs(refs, workingset);
+					int hist = lru_hist_from_seq(lrugen->min_seq[type]);
+
+					WRITE_ONCE(lrugen->protected[hist][type][tier],
+						   lrugen->protected[hist][type][tier] + nr_pages);
+				}
+			} else {
+				list_move(&page->lru, &lrugen->lists[new_gen][type][zone]);
+			}
 
 			if (!--remaining)
-				return false;
+				break;
 		}
+		WRITE_ONCE(lrugen->nr_pages[old_gen][type][zone],
+			   lrugen->nr_pages[old_gen][type][zone] - delta);
+		WRITE_ONCE(lrugen->nr_pages[target_gen][type][zone],
+			   lrugen->nr_pages[target_gen][type][zone] + delta);
+		if (!remaining)
+			return false;
 	}
 done:
 	reset_ctrl_pos(lruvec, type, true);
