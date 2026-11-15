@@ -581,7 +581,11 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 		if (PageCompound(page)) {
 			const unsigned int order = compound_order(page);
 
-			if (likely(order < MAX_ORDER)) {
+			/* CVE-2025-21815: bogus compound_order is union with flags,
+			 * guard (1UL << order) shift-out-of-bounds.
+			 * Upstream d1366e74342e checks order <= MAX_PAGE_ORDER;
+			 * 4.19 has no MAX_PAGE_ORDER, MAX_ORDER-1 is equivalent. */
+			if (likely(order <= MAX_ORDER - 1)) {
 				blockpfn += (1UL << order) - 1;
 				cursor += (1UL << order) - 1;
 			}
