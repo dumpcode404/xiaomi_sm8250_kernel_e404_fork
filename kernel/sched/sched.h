@@ -2705,6 +2705,11 @@ static inline bool uclamp_rq_is_idle(struct rq *rq)
 	return rq->uclamp_flags & UCLAMP_FLAG_IDLE;
 }
 
+static inline bool uclamp_rq_is_capped(struct rq *rq)
+{
+	return uclamp_rq_get(rq, UCLAMP_MAX) < SCHED_CAPACITY_SCALE;
+}
+
 /**
  * uclamp_rq_util_with - clamp @util with @rq and @p effective uclamp values.
  * @rq:		The rq to clamp against. Must not be NULL.
@@ -2809,6 +2814,11 @@ static inline void uclamp_rq_set(struct rq *rq, enum uclamp_id clamp_id,
 }
 
 static inline bool uclamp_rq_is_idle(struct rq *rq)
+{
+	return false;
+}
+
+static inline bool uclamp_rq_is_capped(struct rq *rq)
 {
 	return false;
 }
