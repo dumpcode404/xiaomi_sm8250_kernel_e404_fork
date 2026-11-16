@@ -705,8 +705,10 @@ static void set_load_weight(struct task_struct *p, bool update_load)
 	 */
 	if (update_load && p->sched_class == &fair_sched_class)
 		reweight_task(p, &lw);
-	else
+	else {
 		p->se.load = lw;
+		p->se.h_load = lw;
+	}
 }
 
 #ifdef CONFIG_UCLAMP_TASK
@@ -4106,11 +4108,8 @@ EXPORT_PER_CPU_SYMBOL(kernel_cpustat);
  */
 static inline void prefetch_curr_exec_start(struct task_struct *p)
 {
-#ifdef CONFIG_FAIR_GROUP_SCHED
-	struct sched_entity *curr = (&p->se)->cfs_rq->curr;
-#else
-	struct sched_entity *curr = (&task_rq(p)->cfs)->curr;
-#endif
+	struct sched_entity *curr = task_rq(p)->cfs.curr;
+
 	prefetch(curr);
 	prefetch(&curr->exec_start);
 }
