@@ -6684,6 +6684,20 @@ static int choose_idle_cpu(int cpu, struct task_struct *p)
 	       choose_sched_idle_rq(cpu_rq(cpu), p);
 }
 
+/* Update curr's vruntime before placing entity or updating lag.
+ * Hierarchical version: update the cfs_rq that owns curr. For leaf
+ * tasks this is the leaf cfs_rq itself; for group entities it is the
+ * parent level. Per-level update_curr() handles vruntime locally, so
+ * no flat single-runqueue redirect to rq->cfs is done here.
+ */
+static inline void update_curr_eevdf(struct cfs_rq *cfs_rq)
+{
+	if (!cfs_rq->curr)
+		return;
+
+	update_curr(cfs_rq_of(cfs_rq->curr));
+}
+
 static void
 requeue_delayed_entity(struct sched_entity *se)
 {
