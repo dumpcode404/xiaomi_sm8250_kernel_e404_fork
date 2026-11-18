@@ -983,6 +983,7 @@ static struct kgsl_process_private *kgsl_process_private_new(
 	struct pid *cur_pid = get_task_pid(current->group_leader, PIDTYPE_PID);
 
 	/* Search in the process list */
+	spin_lock(&kgsl_driver.proclist_lock);
 	list_for_each_entry(private, &kgsl_driver.process_list, list) {
 		if (private->pid == cur_pid) {
 			if (!kgsl_process_private_get(private)) {
@@ -994,9 +995,11 @@ static struct kgsl_process_private *kgsl_process_private_new(
 			 * reference counter which can lead to use-after-free.
 			 */
 			put_pid(cur_pid);
+			spin_unlock(&kgsl_driver.proclist_lock);
 			return private;
 		}
 	}
+	spin_unlock(&kgsl_driver.proclist_lock);
 
 	/* Create a new object */
 	private = kzalloc(sizeof(struct kgsl_process_private), GFP_KERNEL);
@@ -2440,6 +2443,9 @@ static int check_vma(unsigned long hostptr, u64 size)
 {
 	struct vm_area_struct *vma;
 	unsigned long cur = hostptr;
+
+	if (size > ULONG_MAX - hostptr)
+		return false;
 
 	while (cur < (hostptr + size)) {
 		vma = find_vma(current->mm, cur);

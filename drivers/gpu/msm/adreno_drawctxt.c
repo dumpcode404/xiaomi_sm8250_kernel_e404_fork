@@ -517,7 +517,14 @@ void adreno_drawctxt_detach(struct kgsl_context *context)
 		wait_event_interruptible_timeout(drawctxt->timeout,
 					kgsl_context_invalid(&drawctxt->base),
 					msecs_to_jiffies(5000));
-		return;
+
+		/*
+		 * Fall through to cleanup even on RB-wait timeout so
+		 * preemption resources, profile state and waiter wakeups
+		 * are not skipped. Reacquire the device mutex released
+		 * above; the cleanup section below releases it.
+		 */
+		mutex_lock(&device->mutex);
 	}
 
 	kgsl_sharedmem_writel(device, &device->memstore,

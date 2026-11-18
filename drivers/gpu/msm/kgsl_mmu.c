@@ -379,7 +379,7 @@ int
 kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 				struct kgsl_memdesc *memdesc)
 {
-	int size;
+	uint64_t size;
 
 	if (!memdesc->gpuaddr)
 		return -EINVAL;
@@ -557,8 +557,8 @@ int kgsl_mmu_sparse_dummy_map(struct kgsl_pagetable *pagetable,
 		if (ret)
 			return ret;
 
-		atomic_dec(&pagetable->stats.entries);
-		atomic_long_sub(size, &pagetable->stats.mapped);
+		atomic_inc(&pagetable->stats.entries);
+		atomic_long_add(size, &pagetable->stats.mapped);
 	}
 
 	return 0;
