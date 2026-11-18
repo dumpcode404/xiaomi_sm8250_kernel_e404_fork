@@ -1862,14 +1862,22 @@ done:
 static int kgsl_iommu_sparse_dummy_map(struct kgsl_pagetable *pt,
 		struct kgsl_memdesc *memdesc, uint64_t offset, uint64_t size)
 {
-	int ret = 0, i;
+	int ret = 0;
+	unsigned int i;
 	struct page **pages = NULL;
 	struct sg_table sgt;
-	int count = size >> PAGE_SHIFT;
+	unsigned int count;
+	uint64_t footprint = kgsl_memdesc_footprint(memdesc);
 	unsigned int map_flags;
 
 	/* verify the offset is within our range */
-	if (size + offset > kgsl_memdesc_footprint(memdesc))
+	if (size == 0 || size > UINT_MAX)
+		return -EINVAL;
+	if (offset > footprint || size > footprint - offset)
+		return -EINVAL;
+
+	count = (unsigned int)(size >> PAGE_SHIFT);
+	if (count == 0)
 		return -EINVAL;
 
 	if (kgsl_dummy_page == NULL) {
@@ -1905,13 +1913,21 @@ static int _map_to_one_page(struct kgsl_pagetable *pt, uint64_t addr,
 		struct kgsl_memdesc *memdesc, uint64_t physoffset,
 		uint64_t size, unsigned int map_flags)
 {
-	int ret = 0, i;
+	int ret = 0;
+	unsigned int i = 0;
 	int pg_sz = kgsl_memdesc_get_pagesize(memdesc);
-	int count = size >> PAGE_SHIFT;
+	unsigned int count;
 	struct page *page = NULL;
 	struct page **pages = NULL;
 	struct sg_page_iter sg_iter;
 	struct sg_table sgt;
+
+	if (size == 0 || size > UINT_MAX)
+		return -EINVAL;
+
+	count = (unsigned int)(size >> PAGE_SHIFT);
+	if (count == 0)
+		return -EINVAL;
 
 	/* Find our physaddr offset addr */
 	if (memdesc->pages != NULL)
@@ -1931,15 +1947,16 @@ static int _map_to_one_page(struct kgsl_pagetable *pt, uint64_t addr,
 	if (pages == NULL)
 		return -ENOMEM;
 
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < count;) {
 		if (pg_sz != PAGE_SIZE) {
 			struct page *tmp_page = page;
-			int j;
+			unsigned int j;
 
-			for (j = 0; j < 16; j++, tmp_page += PAGE_SIZE)
-				pages[i++] = tmp_page;
-		} else
-			pages[i] = page;
+			for (j = 0; j < 16 && i < count; j++)
+				pages[i++] = tmp_page++;
+		} else {
+			pages[i++] = page;
+		}
 	}
 
 	ret = sg_alloc_table_from_pages(&sgt, pages, count,
