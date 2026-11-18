@@ -332,11 +332,12 @@ static void _retire_sparseobj(struct kgsl_drawobj_sparse *sparseobj,
 }
 
 static int _retire_markerobj(struct kgsl_drawobj_cmd *cmdobj,
-				struct adreno_context *drawctxt)
+				struct adreno_context *drawctxt,
+				struct kgsl_drawobj **retired)
 {
 	if (_marker_expired(cmdobj)) {
 		_pop_drawobj(drawctxt);
-		_retire_timestamp(DRAWOBJ(cmdobj));
+		*retired = DRAWOBJ(cmdobj);
 		return 0;
 	}
 
@@ -353,11 +354,12 @@ static int _retire_markerobj(struct kgsl_drawobj_cmd *cmdobj,
 }
 
 static int _retire_syncobj(struct kgsl_drawobj_sync *syncobj,
-				struct adreno_context *drawctxt)
+				struct adreno_context *drawctxt,
+				struct kgsl_drawobj **retired)
 {
 	if (!kgsl_drawobj_events_pending(syncobj)) {
 		_pop_drawobj(drawctxt);
-		kgsl_drawobj_destroy(DRAWOBJ(syncobj));
+		*retired = DRAWOBJ(syncobj);
 		return 0;
 	}
 
@@ -382,7 +384,9 @@ static int _retire_syncobj(struct kgsl_drawobj_sync *syncobj,
  * c) NULL for no commands remaining in drawqueue.
  */
 static struct kgsl_drawobj *_process_drawqueue_get_next_drawobj(
-				struct adreno_context *drawctxt)
+				struct adreno_context *drawctxt,
+				struct kgsl_drawobj **retired,
+				unsigned int *nretired)
 {
 	struct kgsl_drawobj *drawobj;
 	unsigned int i = drawctxt->drawqueue_head;
@@ -402,13 +406,25 @@ static struct kgsl_drawobj *_process_drawqueue_get_next_drawobj(
 		if (drawobj->type == CMDOBJ_TYPE)
 			return drawobj;
 		else if (drawobj->type == MARKEROBJ_TYPE) {
-			ret = _retire_markerobj(CMDOBJ(drawobj), drawctxt);
+			struct kgsl_drawobj *r = NULL;
+
+			ret = _retire_markerobj(CMDOBJ(drawobj), drawctxt,
+					&r);
+			if (ret == 0 && r != NULL &&
+			    *nretired < ADRENO_CONTEXT_DRAWQUEUE_SIZE)
+				retired[(*nretired)++] = r;
 			/* Special case where marker needs to be sent to GPU */
 			if (ret == 1)
 				return drawobj;
-		} else if (drawobj->type == SYNCOBJ_TYPE)
-			ret = _retire_syncobj(SYNCOBJ(drawobj), drawctxt);
-		else
+		} else if (drawobj->type == SYNCOBJ_TYPE) {
+			struct kgsl_drawobj *r = NULL;
+
+			ret = _retire_syncobj(SYNCOBJ(drawobj), drawctxt,
+					&r);
+			if (ret == 0 && r != NULL &&
+			    *nretired < ADRENO_CONTEXT_DRAWQUEUE_SIZE)
+				retired[(*nretired)++] = r;
+		} else
 			return ERR_PTR(-EINVAL);
 
 		if (ret == -EAGAIN)
@@ -652,7 +668,9 @@ static int sendcmd(struct adreno_device *adreno_dev,
  * d) NULL for no sparseobj
  */
 static struct kgsl_drawobj_sparse *_get_next_sparseobj(
-				struct adreno_context *drawctxt)
+				struct adreno_context *drawctxt,
+				struct kgsl_drawobj **retired,
+				unsigned int *nretired)
 {
 	struct kgsl_drawobj *drawobj;
 	unsigned int i = drawctxt->drawqueue_head;
@@ -669,9 +687,15 @@ static struct kgsl_drawobj_sparse *_get_next_sparseobj(
 		if (drawobj == NULL)
 			return NULL;
 
-		if (drawobj->type == SYNCOBJ_TYPE)
-			ret = _retire_syncobj(SYNCOBJ(drawobj), drawctxt);
-		else if (drawobj->type == SPARSEOBJ_TYPE)
+		if (drawobj->type == SYNCOBJ_TYPE) {
+			struct kgsl_drawobj *r = NULL;
+
+			ret = _retire_syncobj(SYNCOBJ(drawobj), drawctxt,
+					&r);
+			if (ret == 0 && r != NULL &&
+			    *nretired < ADRENO_CONTEXT_DRAWQUEUE_SIZE)
+				retired[(*nretired)++] = r;
+		} else if (drawobj->type == SPARSEOBJ_TYPE)
 			return SPARSEOBJ(drawobj);
 		else
 			return ERR_PTR(-EINVAL);
@@ -693,18 +717,25 @@ static int _process_drawqueue_sparse(
 	unsigned int i;
 
 	for (i = 0; i < ADRENO_CONTEXT_DRAWQUEUE_SIZE; i++) {
+		struct kgsl_drawobj *retired[ADRENO_CONTEXT_DRAWQUEUE_SIZE];
+		unsigned int nretired = 0, k;
 
 		spin_lock(&drawctxt->lock);
-		sparseobj = _get_next_sparseobj(drawctxt);
+		sparseobj = _get_next_sparseobj(drawctxt, retired, &nretired);
 		if (IS_ERR_OR_NULL(sparseobj)) {
 			if (IS_ERR(sparseobj))
 				ret = PTR_ERR(sparseobj);
 			spin_unlock(&drawctxt->lock);
+			for (k = 0; k < nretired; k++)
+				kgsl_drawobj_destroy(retired[k]);
 			return ret;
 		}
 
 		_pop_drawobj(drawctxt);
 		spin_unlock(&drawctxt->lock);
+
+		for (k = 0; k < nretired; k++)
+			kgsl_drawobj_destroy(retired[k]);
 
 		_retire_sparseobj(sparseobj, drawctxt);
 	}
@@ -735,9 +766,20 @@ static int dispatcher_context_sendcmds(struct adreno_device *adreno_dev,
 		return _process_drawqueue_sparse(drawctxt);
 
 	if (dispatch_q->inflight >= inflight) {
+		struct kgsl_drawobj *retired[ADRENO_CONTEXT_DRAWQUEUE_SIZE];
+		unsigned int nretired = 0, k;
+
 		spin_lock(&drawctxt->lock);
-		_process_drawqueue_get_next_drawobj(drawctxt);
+		_process_drawqueue_get_next_drawobj(drawctxt, retired,
+				&nretired);
 		spin_unlock(&drawctxt->lock);
+
+		for (k = 0; k < nretired; k++) {
+			if (retired[k]->type == MARKEROBJ_TYPE)
+				_retire_timestamp(retired[k]);
+			else
+				kgsl_drawobj_destroy(retired[k]);
+		}
 		return -EBUSY;
 	}
 
@@ -748,12 +790,15 @@ static int dispatcher_context_sendcmds(struct adreno_device *adreno_dev,
 		(dispatch_q->inflight < inflight)) {
 		struct kgsl_drawobj *drawobj;
 		struct kgsl_drawobj_cmd *cmdobj;
+		struct kgsl_drawobj *retired_holder[ADRENO_CONTEXT_DRAWQUEUE_SIZE];
+		unsigned int nretired_holder = 0, k;
 
 		if (adreno_gpu_fault(adreno_dev) != 0)
 			break;
 
 		spin_lock(&drawctxt->lock);
-		drawobj = _process_drawqueue_get_next_drawobj(drawctxt);
+		drawobj = _process_drawqueue_get_next_drawobj(drawctxt,
+				retired_holder, &nretired_holder);
 
 		/*
 		 * adreno_context_get_drawobj returns -EAGAIN if the current
@@ -766,10 +811,24 @@ static int dispatcher_context_sendcmds(struct adreno_device *adreno_dev,
 			if (IS_ERR(drawobj))
 				ret = PTR_ERR(drawobj);
 			spin_unlock(&drawctxt->lock);
+			for (k = 0; k < nretired_holder; k++) {
+				if (retired_holder[k]->type == MARKEROBJ_TYPE)
+					_retire_timestamp(retired_holder[k]);
+				else
+					kgsl_drawobj_destroy(retired_holder[k]);
+			}
 			break;
 		}
 		_pop_drawobj(drawctxt);
 		spin_unlock(&drawctxt->lock);
+
+		for (k = 0; k < nretired_holder; k++) {
+			if (retired_holder[k]->type == MARKEROBJ_TYPE)
+				_retire_timestamp(retired_holder[k]);
+			else
+				kgsl_drawobj_destroy(retired_holder[k]);
+		}
+		nretired_holder = 0;
 
 		timestamp = drawobj->timestamp;
 		cmdobj = CMDOBJ(drawobj);
