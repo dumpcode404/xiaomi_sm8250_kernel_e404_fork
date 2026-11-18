@@ -424,8 +424,10 @@ static int _set_pagetable_gpu(struct adreno_ringbuffer *rb,
 
 	count = adreno_iommu_set_pt_generate_cmds(rb, link, new_pt);
 
-	WARN(count > (PAGE_SIZE / sizeof(unsigned int)),
-		"Temp command buffer overflow\n");
+	if (count > PAGE_SIZE / sizeof(unsigned int)) {
+		kfree(link);
+		return -EINVAL;
+	}
 
 	/*
 	 * This returns the per context timestamp but we need to

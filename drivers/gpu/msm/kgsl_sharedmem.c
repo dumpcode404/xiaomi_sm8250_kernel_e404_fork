@@ -1269,8 +1269,8 @@ kgsl_sharedmem_readl(const struct kgsl_memdesc *memdesc,
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
 
-	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
-	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
+	if (memdesc->size < sizeof(uint32_t) ||
+	    offsetbytes > memdesc->size - sizeof(uint32_t))
 		return -ERANGE;
 
 	/*
@@ -1299,8 +1299,8 @@ kgsl_sharedmem_writel(struct kgsl_device *device,
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
 
-	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
-	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
+	if (memdesc->size < sizeof(uint32_t) ||
+	    offsetbytes > memdesc->size - sizeof(uint32_t))
 		return -ERANGE;
 	dst = (uint32_t *)(memdesc->hostptr + offsetbytes);
 	*dst = src;
@@ -1330,8 +1330,8 @@ kgsl_sharedmem_readq(const struct kgsl_memdesc *memdesc,
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
 
-	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
-	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
+	if (memdesc->size < sizeof(uint32_t) ||
+	    offsetbytes > memdesc->size - sizeof(uint32_t))
 		return -ERANGE;
 
 	/*
@@ -1360,8 +1360,8 @@ kgsl_sharedmem_writeq(struct kgsl_device *device,
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
 
-	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
-	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
+	if (memdesc->size < sizeof(uint32_t) ||
+	    offsetbytes > memdesc->size - sizeof(uint32_t))
 		return -ERANGE;
 	dst = (uint64_t *)(memdesc->hostptr + offsetbytes);
 	*dst = src;
@@ -1384,7 +1384,8 @@ kgsl_sharedmem_set(struct kgsl_device *device,
 	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL))
 		return -EINVAL;
 
-	if (WARN_ON(offsetbytes + sizebytes > memdesc->size))
+	if (sizebytes > memdesc->size ||
+	    offsetbytes > memdesc->size - sizebytes)
 		return -EINVAL;
 
 	memset(memdesc->hostptr + offsetbytes, value, sizebytes);

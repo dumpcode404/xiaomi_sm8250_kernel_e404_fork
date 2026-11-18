@@ -7,6 +7,7 @@
 #define __KGSL_SHAREDMEM_H
 
 #include <linux/dma-mapping.h>
+#include <linux/overflow.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 
@@ -123,7 +124,7 @@ kgsl_memdesc_get_align(const struct kgsl_memdesc *memdesc)
 static inline int
 kgsl_memdesc_get_pagesize(const struct kgsl_memdesc *memdesc)
 {
-	return (1 << kgsl_memdesc_get_align(memdesc));
+	return (int)(1UL << kgsl_memdesc_get_align(memdesc));
 }
 
 /*
@@ -278,8 +279,14 @@ kgsl_memdesc_use_cpu_map(const struct kgsl_memdesc *memdesc)
 static inline uint64_t
 kgsl_memdesc_footprint(const struct kgsl_memdesc *memdesc)
 {
-	return ALIGN(memdesc->size + kgsl_memdesc_guard_page_size(memdesc),
-		PAGE_SIZE);
+	uint64_t total;
+
+	if (check_add_overflow(memdesc->size,
+	    (uint64_t)kgsl_memdesc_guard_page_size(memdesc), &total) ||
+	    total > U64_MAX - (PAGE_SIZE - 1))
+		return U64_MAX;
+
+	return ALIGN(total, PAGE_SIZE);
 }
 
 /*

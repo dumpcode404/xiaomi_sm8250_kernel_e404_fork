@@ -481,8 +481,20 @@ void kgsl_sync_fence_async_cancel(struct kgsl_sync_fence_cb *kcb)
 	 * After fence_remove_callback() returns, the fence callback is
 	 * either not called at all, or completed without freeing kcb.
 	 * This thread can then put the fence refcount and free kcb.
+	 * Ownership here is arbitrated by the syncobj pending bit in
+	 * drawobj_destroy_sync(): cancel is only called after winning
+	 * test_and_clear_bit(), so a racing callback returns false and
+	 * skips its free. The remove return is informational only; a
+	 * conditional free on false would leak kcb when the callback
+	 * is already dequeued but lost the bit race.
 	 */
-	dma_fence_remove_callback(kcb->fence, &kcb->fence_cb);
+	{
+		bool removed;
+
+		removed = dma_fence_remove_callback(kcb->fence,
+				&kcb->fence_cb);
+		(void)removed;
+	}
 	dma_fence_put(kcb->fence);
 	kfree(kcb);
 }

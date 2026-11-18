@@ -3413,7 +3413,8 @@ long kgsl_ioctl_gpuobj_sync(struct kgsl_device_private *dev_priv,
 	int i;
 	void __user *ptr;
 
-	if (param->count == 0 || param->count > 128)
+	if (param->count == 0 || param->count > 128 ||
+	    param->obj_len == 0)
 		return -EINVAL;
 
 	objs = kcalloc(param->count, sizeof(*objs), GFP_KERNEL);
@@ -4279,8 +4280,9 @@ long kgsl_ioctl_sparse_bind(struct kgsl_device_private *dev_priv,
 
 	ptr = (void __user *) (uintptr_t) param->list;
 
-	if (param->size > sizeof(struct kgsl_sparse_binding_object) ||
-		param->count == 0 || ptr == NULL)
+	if (param->size == 0 ||
+	    param->size > sizeof(struct kgsl_sparse_binding_object) ||
+	    param->count == 0 || ptr == NULL)
 		return -EINVAL;
 
 	virt_entry = kgsl_sharedmem_find_id_flags(private, param->id,
