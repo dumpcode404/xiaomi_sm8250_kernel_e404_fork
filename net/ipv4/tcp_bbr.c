@@ -1558,10 +1558,10 @@ static void bbr_pick_probe_wait(struct sock *sk)
 
 	/* Decide the random round-trip bound for wait until probe: */
 	bbr->rounds_since_probe =
-		get_random_u32_below(bbr_param(sk, bw_probe_rand_rounds));
+		prandom_u32_max(bbr_param(sk, bw_probe_rand_rounds));
 	/* Decide the random wall clock bound for wait until probe: */
 	bbr->probe_wait_us = bbr_param(sk, bw_probe_base_us) +
-			     get_random_u32_below(bbr_param(sk, bw_probe_rand_us));
+			     prandom_u32_max(bbr_param(sk, bw_probe_rand_us));
 }
 
 static void bbr_set_cycle_idx(struct sock *sk, int cycle_idx)
@@ -2376,32 +2376,10 @@ static struct tcp_congestion_ops tcp_bbr_cong_ops __read_mostly = {
 	.set_state	= bbr_set_state,
 };
 
-BTF_KFUNCS_START(tcp_bbr_check_kfunc_ids)
-BTF_ID_FLAGS(func, bbr_init)
-BTF_ID_FLAGS(func, bbr_main)
-BTF_ID_FLAGS(func, bbr_sndbuf_expand)
-BTF_ID_FLAGS(func, bbr_skb_marked_lost)
-BTF_ID_FLAGS(func, bbr_undo_cwnd)
-BTF_ID_FLAGS(func, bbr_cwnd_event)
-BTF_ID_FLAGS(func, bbr_ssthresh)
-BTF_ID_FLAGS(func, bbr_tso_segs)
-BTF_ID_FLAGS(func, bbr_set_state)
-BTF_KFUNCS_END(tcp_bbr_check_kfunc_ids)
-
-static const struct btf_kfunc_id_set tcp_bbr_kfunc_set = {
-	.owner = THIS_MODULE,
-	.set   = &tcp_bbr_check_kfunc_ids,
-};
-
 static int __init bbr_register(void)
 {
-	int ret;
-
 	BUILD_BUG_ON(sizeof(struct bbr) > ICSK_CA_PRIV_SIZE);
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &tcp_bbr_kfunc_set);
-	if (ret < 0)
-		return ret;
 	return tcp_register_congestion_control(&tcp_bbr_cong_ops);
 }
 
