@@ -525,6 +525,23 @@ static int _iommu_map_sg_sync_pc(struct kgsl_pagetable *pt,
 		return  -ENODEV;
 	}
 
+	{
+		struct scatterlist *s;
+		unsigned int i;
+		size_t total = 0;
+
+		for_each_sg(sg, s, nents, i)
+			total += s->length;
+
+		if (mapped < total) {
+			_iommu_unmap_sync_pc(pt, addr, mapped);
+			dev_err(device->dev,
+				"map sg partial: 0x%016llX mapped %zd of %zu\n",
+				addr, mapped, total);
+			return -ENODEV;
+		}
+	}
+
 	return 0;
 }
 
@@ -1841,8 +1858,8 @@ kgsl_iommu_map(struct kgsl_pagetable *pt,
 	else
 		sgt = memdesc->sgt;
 
-	if (IS_ERR(sgt))
-		return PTR_ERR(sgt);
+	if (IS_ERR_OR_NULL(sgt))
+		return sgt ? PTR_ERR(sgt) : -EINVAL;
 
 	ret = _iommu_map_sg_sync_pc(pt, addr, sgt->sgl, sgt->nents, flags);
 	if (ret)
@@ -2003,8 +2020,8 @@ static int kgsl_iommu_map_offset(struct kgsl_pagetable *pt,
 	else
 		sgt = memdesc->sgt;
 
-	if (IS_ERR(sgt))
-		return PTR_ERR(sgt);
+	if (IS_ERR_OR_NULL(sgt))
+		return sgt ? PTR_ERR(sgt) : -EINVAL;
 
 	if (feature_flag & KGSL_SPARSE_BIND_MULTIPLE_TO_PHYS)
 		ret = _map_to_one_page(pt, virtaddr + virtoffset,
