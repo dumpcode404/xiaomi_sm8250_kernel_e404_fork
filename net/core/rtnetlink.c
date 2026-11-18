@@ -2839,6 +2839,14 @@ out:
 	return err;
 }
 
+bool rtnl_dev_link_net_capable(const struct net_device *dev,
+			       const struct net *link_net)
+{
+	return net_eq(link_net, dev_net(dev)) ||
+	       ns_capable(link_net->user_ns, CAP_NET_ADMIN);
+}
+EXPORT_SYMBOL_GPL(rtnl_dev_link_net_capable);
+
 int rtnl_configure_link(struct net_device *dev, const struct ifinfomsg *ifm)
 {
 	unsigned int old_flags;
