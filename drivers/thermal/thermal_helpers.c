@@ -133,10 +133,10 @@ void thermal_zone_set_trips(struct thermal_zone_device *tz)
 
 		trip_low = trip_temp - hysteresis;
 
-		if (trip_low < tz->temperature && trip_low > low)
+		if (trip_low <= tz->temperature && trip_low > low)
 			low = trip_low;
 
-		if (trip_temp > tz->temperature && trip_temp < high)
+		if (trip_temp >= tz->temperature && trip_temp < high)
 			high = trip_temp;
 	}
 
