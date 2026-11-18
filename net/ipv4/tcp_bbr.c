@@ -1019,7 +1019,8 @@ static void bbr_update_model(struct sock *sk, const struct rate_sample *rs)
 	bbr_update_gains(sk);
 }
 
-static void bbr_main(struct sock *sk, const struct rate_sample *rs)
+static void bbr_main(struct sock *sk, u32 ack, int flag,
+		     const struct rate_sample *rs)
 {
 	struct bbr *bbr = inet_csk_ca(sk);
 	u32 bw;
