@@ -27,6 +27,7 @@
 #include <asm/cacheflush.h>
 
 #include <soc/qcom/scm.h>
+#include <linux/qcom_scm.h>
 
 #include "../thermal_core.h"
 #include "lmh_dbg.h"
@@ -553,6 +554,9 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 	cpumask_t mask = { CPU_BITS_NONE };
 	const __be32 *addr;
 	bool no_cdev_register = false;
+
+	if (!qcom_scm_is_available())
+		return -EPROBE_DEFER;
 
 	for_each_possible_cpu(cpu) {
 		cpu_node = of_cpu_device_node_get(cpu);
