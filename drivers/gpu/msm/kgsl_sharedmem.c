@@ -683,6 +683,9 @@ static int kgsl_contiguous_vmfault(struct kgsl_memdesc *memdesc,
 	offset = ((unsigned long) vmf->address - vma->vm_start) >>
 		PAGE_SHIFT;
 
+	if (offset >= (memdesc->size >> PAGE_SHIFT))
+		return VM_FAULT_SIGBUS;
+
 	pfn = (memdesc->physaddr >> PAGE_SHIFT) + offset;
 	ret = vm_insert_pfn(vma, (unsigned long) vmf->address, pfn);
 
