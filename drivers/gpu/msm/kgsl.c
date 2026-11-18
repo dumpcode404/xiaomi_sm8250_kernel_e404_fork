@@ -3011,8 +3011,17 @@ static int kgsl_setup_dma_buf(struct kgsl_device *device,
 
 out:
 	if (ret) {
+		if (meta->table != NULL && !IS_ERR(meta->table) &&
+		    !IS_ERR_OR_NULL(attach))
+			dma_buf_unmap_attachment(attach, meta->table,
+				DMA_BIDIRECTIONAL);
 		if (!IS_ERR_OR_NULL(attach))
 			dma_buf_detach(dmabuf, attach);
+
+		entry->priv_data = NULL;
+		entry->memdesc.sgt = NULL;
+		entry->memdesc.ops = NULL;
+		entry->memdesc.size = 0;
 
 		kfree(meta);
 	}
