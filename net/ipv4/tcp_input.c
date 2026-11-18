@@ -1009,6 +1009,9 @@ static void tcp_skb_mark_lost(struct tcp_sock *tp, struct sk_buff *skb)
 		tp->lost_out += tcp_skb_pcount(skb);
 		tcp_sum_lost(tp, skb);
 		TCP_SKB_CB(skb)->sacked |= TCPCB_LOST;
+		if (inet_csk((struct sock *)tp)->icsk_ca_ops->skb_marked_lost)
+			inet_csk((struct sock *)tp)->icsk_ca_ops->skb_marked_lost(
+				(struct sock *)tp, skb);
 	}
 }
 
@@ -1020,6 +1023,9 @@ void tcp_skb_mark_lost_uncond_verify(struct tcp_sock *tp, struct sk_buff *skb)
 	if (!(TCP_SKB_CB(skb)->sacked & (TCPCB_LOST|TCPCB_SACKED_ACKED))) {
 		tp->lost_out += tcp_skb_pcount(skb);
 		TCP_SKB_CB(skb)->sacked |= TCPCB_LOST;
+		if (inet_csk((struct sock *)tp)->icsk_ca_ops->skb_marked_lost)
+			inet_csk((struct sock *)tp)->icsk_ca_ops->skb_marked_lost(
+				(struct sock *)tp, skb);
 	}
 }
 
