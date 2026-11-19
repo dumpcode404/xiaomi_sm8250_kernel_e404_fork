@@ -1987,6 +1987,59 @@ putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list)
 }
 
 /*
+ * Twin of putback_inactive_pages() that restores clean, unreferenced pages
+ * at the LRU tail instead of the head, so rotation-missed pages stay prime
+ * reclaim candidates (cold/hot inversion avoidance). Caller must hold
+ * pgdat->lru_lock. Pages reaching zero are spliced back into page_list for
+ * the caller to uncharge and free, exactly like putback_inactive_pages().
+ */
+static void
+putback_inactive_pages_tail(struct lruvec *lruvec, struct list_head *page_list)
+{
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+	LIST_HEAD(pages_to_free);
+
+	/*
+	 * Put back any unfreeable pages.
+	 */
+	while (!list_empty(page_list)) {
+		struct page *page = lru_to_page(page_list);
+
+		VM_BUG_ON_PAGE(PageLRU(page), page);
+		list_del(&page->lru);
+		if (unlikely(!page_evictable(page))) {
+			spin_unlock_irq(&pgdat->lru_lock);
+			putback_lru_page(page);
+			spin_lock_irq(&pgdat->lru_lock);
+			continue;
+		}
+
+		lruvec = mem_cgroup_page_lruvec(page, pgdat);
+
+		SetPageLRU(page);
+		add_page_to_lru_list_tail(page, lruvec);
+
+		if (put_page_testzero(page)) {
+			del_page_from_lru_list(page, lruvec);
+			__clear_page_lru_flags(page);
+
+			if (unlikely(PageCompound(page))) {
+				spin_unlock_irq(&pgdat->lru_lock);
+				mem_cgroup_uncharge(page);
+				(*get_compound_page_dtor(page))(page);
+				spin_lock_irq(&pgdat->lru_lock);
+			} else
+				list_add(&page->lru, &pages_to_free);
+		}
+	}
+
+	/*
+	 * To save our caller's stack, now use input list for pages to free.
+	 */
+	list_splice(&pages_to_free, page_list);
+}
+
+/*
  * If a kernel thread (such as nfsd for loop-back mounts) services
  * a backing device by writing to the page cache it sets PF_LESS_THROTTLE.
  * In that case we should only throttle if the backing device it is
@@ -4664,6 +4717,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	int nr_isolated = 0;
 	LIST_HEAD(list);
 	LIST_HEAD(clean);
+	LIST_HEAD(rotate);
 	struct page *page;
 	struct page *next;
 	enum vm_event_item item;
@@ -4715,6 +4769,21 @@ retry:
 		if (skip_retry || PageActive(page) || PageReferenced(page) ||
 		    page_mapped(page) || PageLocked(page) ||
 		    PageDirty(page) || PageWriteback(page)) {
+			/*
+			 * Cold/hot inversion avoidance: on the retry pass,
+			 * clean pages that missed rotate_reclaimable_page()
+			 * while isolated are still prime reclaim candidates.
+			 * Restore them at the LRU tail rather than activating
+			 * them with the rest of the rejected pages.
+			 */
+			if (skip_retry && !PageActive(page) &&
+			    !PageReferenced(page) && !page_mapped(page) &&
+			    !PageLocked(page) && !PageDirty(page) &&
+			    !PageWriteback(page) && !PageCompound(page) &&
+			    page_count(page) == 1) {
+				list_move(&page->lru, &rotate);
+				continue;
+			}
 			/* don't add rejected pages to the oldest generation */
 			set_mask_bits(&page->flags, LRU_REFS_MASK | LRU_REFS_FLAGS,
 				      BIT(PG_active));
@@ -4728,6 +4797,7 @@ retry:
 	spin_lock_irq(&pgdat->lru_lock);
 
 	putback_inactive_pages(lruvec, &list);
+	putback_inactive_pages_tail(lruvec, &rotate);
 
 	walk = current->reclaim_state ? current->reclaim_state->mm_walk : NULL;
 	if (walk && walk->batched)
@@ -4741,6 +4811,8 @@ retry:
 	spin_unlock_irq(&pgdat->lru_lock);
 	mem_cgroup_uncharge_list(&list);
 	free_unref_page_list(&list);
+	mem_cgroup_uncharge_list(&rotate);
+	free_unref_page_list(&rotate);
 
 	INIT_LIST_HEAD(&list);
 	list_splice_init(&clean, &list);
