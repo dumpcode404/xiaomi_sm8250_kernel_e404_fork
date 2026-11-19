@@ -31,6 +31,7 @@
 #include <linux/idr.h>
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
+#include <linux/seq_file.h>
 #include <linux/cpuhotplug.h>
 #include <linux/percpu.h>
 #include <linux/suspend.h>
@@ -1173,38 +1174,56 @@ static void zram_accessed(struct zram *zram, u32 index)
 	zram->table[index].ac_time = ktime_get_boottime();
 }
 
-static ssize_t read_block_state(struct file *file, char __user *buf,
-				size_t count, loff_t *ppos)
+static void *zram_block_state_start(struct seq_file *seq, loff_t *pos)
 {
-	char *kbuf;
-	ssize_t index, written = 0;
-	struct zram *zram = file->private_data;
+	struct zram *zram = seq->private;
 	unsigned long nr_pages;
-	struct timespec64 ts;
-
-	kbuf = kvmalloc(count, GFP_KERNEL);
-	if (!kbuf)
-		return -ENOMEM;
 
 	down_read(&zram->init_lock);
 	if (!init_done(zram)) {
 		up_read(&zram->init_lock);
-		kvfree(kbuf);
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 	}
 
 	nr_pages = zram->disksize >> PAGE_SHIFT;
+	if (*pos >= nr_pages) {
+		up_read(&zram->init_lock);
+		return NULL;
+	}
 
-	for (index = *ppos; index < nr_pages; index++) {
-		int copied;
+	return pos;
+}
 
-		zram_slot_lock(zram, index);
-		if (!zram_allocated(zram, index))
-			goto next;
+static void *zram_block_state_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	struct zram *zram = seq->private;
+	unsigned long nr_pages = zram->disksize >> PAGE_SHIFT;
 
+	++*pos;
+	if (*pos >= nr_pages)
+		return NULL;
+
+	return pos;
+}
+
+static void zram_block_state_stop(struct seq_file *seq, void *v)
+{
+	struct zram *zram = seq->private;
+
+	if (!IS_ERR(v))
+		up_read(&zram->init_lock);
+}
+
+static int zram_block_state_show(struct seq_file *seq, void *v)
+{
+	struct zram *zram = seq->private;
+	unsigned long index = *(loff_t *)v;
+	struct timespec64 ts;
+
+	zram_slot_lock(zram, index);
+	if (zram_allocated(zram, index)) {
 		ts = ktime_to_timespec64(zram->table[index].ac_time);
-		copied = snprintf(kbuf + written, count,
-			"%12zd %12lld.%06lu %c%c%c%c%c%c\n",
+		seq_printf(seq, "%12lu %12lld.%06lu %c%c%c%c%c%c\n",
 			index, (s64)ts.tv_sec,
 			ts.tv_nsec / NSEC_PER_USEC,
 			zram_test_flag(zram, index, ZRAM_SAME) ? 's' : '.',
@@ -1214,30 +1233,38 @@ static ssize_t read_block_state(struct file *file, char __user *buf,
 			zram_get_priority(zram, index) ? 'r' : '.',
 			zram_test_flag(zram, index,
 				       ZRAM_INCOMPRESSIBLE) ? 'n' : '.');
-
-		if (count <= copied) {
-			zram_slot_unlock(zram, index);
-			break;
-		}
-		written += copied;
-		count -= copied;
-next:
-		zram_slot_unlock(zram, index);
-		*ppos += 1;
 	}
+	zram_slot_unlock(zram, index);
 
-	up_read(&zram->init_lock);
-	if (copy_to_user(buf, kbuf, written))
-		written = -EFAULT;
-	kvfree(kbuf);
-
-	return written;
+	return 0;
 }
 
-static const struct file_operations proc_zram_block_state_op = {
-	.open = simple_open,
-	.read = read_block_state,
-	.llseek = default_llseek,
+static const struct seq_operations zram_block_state_sops = {
+	.start = zram_block_state_start,
+	.next = zram_block_state_next,
+	.stop = zram_block_state_stop,
+	.show = zram_block_state_show,
+};
+
+static int zram_block_state_open(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq;
+	int ret;
+
+	ret = seq_open(file, &zram_block_state_sops);
+	if (!ret) {
+		seq = file->private_data;
+		seq->private = inode->i_private;
+	}
+
+	return ret;
+}
+
+static const struct file_operations zram_block_state_fops = {
+	.open = zram_block_state_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release,
 };
 
 static void zram_debugfs_register(struct zram *zram)
@@ -1248,7 +1275,7 @@ static void zram_debugfs_register(struct zram *zram)
 	zram->debugfs_dir = debugfs_create_dir(zram->disk->disk_name,
 						zram_debugfs_root);
 	debugfs_create_file("block_state", 0400, zram->debugfs_dir,
-				zram, &proc_zram_block_state_op);
+				zram, &zram_block_state_fops);
 }
 
 static void zram_debugfs_unregister(struct zram *zram)
