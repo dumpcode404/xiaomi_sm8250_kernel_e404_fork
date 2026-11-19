@@ -180,7 +180,7 @@ static inline bool compaction_withdrawn(enum compact_result result)
 
 
 bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
-					int alloc_flags);
+					int alloc_flags, gfp_t gfp_mask);
 
 extern int kcompactd_run(int nid);
 extern void kcompactd_stop(int nid);

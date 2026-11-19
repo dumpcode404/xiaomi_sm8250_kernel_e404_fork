@@ -9,6 +9,7 @@
  * Copyright IBM Corp. 2007-2010 Mel Gorman <mel@csn.ul.ie>
  */
 #include <linux/cpu.h>
+#include <linux/cpuset.h>
 #include <linux/swap.h>
 #include <linux/migrate.h>
 #include <linux/compaction.h>
@@ -2089,7 +2090,7 @@ enum compact_result compaction_suitable(struct zone *zone, int order,
 }
 
 bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
-		int alloc_flags)
+		int alloc_flags, gfp_t gfp_mask)
 {
 	struct zone *zone;
 	struct zoneref *z;
@@ -2102,6 +2103,10 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 					ac->nodemask) {
 		unsigned long available;
 		enum compact_result compact_result;
+
+		if (cpusets_enabled() && (alloc_flags & ALLOC_CPUSET) &&
+		    !__cpuset_zone_allowed(zone, gfp_mask))
+			continue;
 
 		/*
 		 * Do not consider all the reclaimable memory because we do not
