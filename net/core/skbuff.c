@@ -609,8 +609,17 @@ static void skb_release_data(struct sk_buff *skb)
 			      &shinfo->dataref))
 		return;
 
-	for (i = 0; i < shinfo->nr_frags; i++)
+	for (i = 0; i < shinfo->nr_frags; i++) {
+		/*
+		 * Defensive: out-of-tree RX drivers may deliver skbs with
+		 * a NULL frag page. put_page(NULL) faults reading
+		 * page->compound_head at page+0x8, so skip it; the packet
+		 * is being dropped and there is nothing to release.
+		 */
+		if (WARN_ON_ONCE(!skb_frag_page(&shinfo->frags[i])))
+			continue;
 		__skb_frag_unref(&shinfo->frags[i]);
+	}
 
 	if (shinfo->frag_list)
 		kfree_skb_list(shinfo->frag_list);
@@ -1232,6 +1241,17 @@ int skb_copy_ubufs(struct sk_buff *skb, gfp_t gfp_mask)
 
 	if (!num_frags)
 		goto release;
+
+	for (i = 0; i < num_frags; i++) {
+		/*
+		 * Fail fast on malformed skbs (NULL frag page) before
+		 * allocating or kmap'ing anything; matches the -EINVAL
+		 * invalid-skb return above and leaves the skb untouched
+		 * for the caller to drop.
+		 */
+		if (WARN_ON_ONCE(!skb_frag_page(&skb_shinfo(skb)->frags[i])))
+			return -EINVAL;
+	}
 
 	new_frags = (__skb_pagelen(skb) + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	for (i = 0; i < new_frags; i++) {
