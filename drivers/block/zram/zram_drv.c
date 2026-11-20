@@ -3143,9 +3143,11 @@ static int zram_remove(struct zram *zram)
 	 */
 	zram_reset_device(zram);
 
+#ifdef CONFIG_ZRAM_MULTI_COMP
 #ifdef CONFIG_PM_SLEEP
 	/* Process context teardown; no suspend/resume can requeue after this. */
 	unregister_pm_notifier(&zram->pm_nb);
+#endif
 #endif
 
 	put_disk(zram->disk);
