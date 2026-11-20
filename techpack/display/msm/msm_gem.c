@@ -534,16 +534,49 @@ void msm_gem_aspace_domain_attach_detach_update(
 		struct msm_gem_address_space *aspace,
 		bool is_detach)
 {
-	struct msm_gem_object *msm_obj;
+	struct msm_gem_object *msm_obj, *tmp;
 	struct drm_gem_object *obj;
 	struct aspace_client *aclient;
+	struct drm_gem_object **objs;
+	unsigned int nobjs = 0, n = 0, i;
 	int ret;
 	uint64_t iova;
 
 	if (!aspace)
 		return;
 
+	/*
+	 * Snapshot live GEM references under list_lock, then drop the
+	 * lock before doing any buffer work. msm_gem_get_iova() and
+	 * put_iova() take msm_obj->lock and (for get) list_lock
+	 * themselves, so calling them with list_lock held would
+	 * self-deadlock (attach) and invert the locking order used by
+	 * the free/purge paths (detach). Objects on the active_list
+	 * normally carry a live reference, but the last put may already
+	 * be in flight, so use kref_get_unless_zero() and skip objects
+	 * that are already going away; the held reference keeps the
+	 * survivors alive across the unlock.
+	 */
 	mutex_lock(&aspace->list_lock);
+	list_for_each_entry(msm_obj, &aspace->active_list, iova_list)
+		nobjs++;
+
+	objs = kcalloc(nobjs, sizeof(*objs), GFP_KERNEL);
+	if (!objs) {
+		mutex_unlock(&aspace->list_lock);
+		return;
+	}
+
+	list_for_each_entry_safe(msm_obj, tmp, &aspace->active_list,
+			iova_list) {
+		obj = &msm_obj->base;
+		if (is_detach && !obj->import_attach)
+			continue;
+		if (!kref_get_unless_zero(&obj->refcount))
+			continue;
+		objs[n++] = obj;
+	}
+
 	if (is_detach) {
 		/* Indicate to clients domain is getting detached */
 		list_for_each_entry(aclient, &aspace->clients, list) {
@@ -551,41 +584,50 @@ void msm_gem_aspace_domain_attach_detach_update(
 				aclient->cb(aclient->cb_data,
 						is_detach);
 		}
+	}
+	mutex_unlock(&aspace->list_lock);
 
+	if (is_detach) {
 		/**
 		 * Unmap active buffers,
 		 * typically clients should do this when the callback is called,
 		 * but this needs to be done for the buffers which are not
 		 * attached to any planes.
 		 */
-		list_for_each_entry(msm_obj, &aspace->active_list, iova_list) {
-			obj = &msm_obj->base;
-			if (obj->import_attach) {
-				mutex_lock(&msm_obj->lock);
-				put_iova(obj);
-				msm_obj->obj_dirty = true;
-				mutex_unlock(&msm_obj->lock);
-			}
+		for (i = 0; i < n; i++) {
+			obj = objs[i];
+			msm_obj = to_msm_bo(obj);
+			mutex_lock(&msm_obj->lock);
+			put_iova(obj);
+			msm_obj->obj_dirty = true;
+			mutex_unlock(&msm_obj->lock);
+			drm_gem_object_put_unlocked(obj);
 		}
 	} else {
 		/* map active buffers */
-		list_for_each_entry(msm_obj, &aspace->active_list, iova_list) {
-			obj = &msm_obj->base;
+		for (i = 0; i < n; i++) {
+			obj = objs[i];
 			ret = msm_gem_get_iova(obj, aspace, &iova);
+			drm_gem_object_put_unlocked(obj);
 			if (ret) {
-				mutex_unlock(&aspace->list_lock);
-				return;
+				while (++i < n)
+					drm_gem_object_put_unlocked(objs[i]);
+				goto out_free;
 			}
 		}
 
 		/* Indicate to clients domain is attached */
+		mutex_lock(&aspace->list_lock);
 		list_for_each_entry(aclient, &aspace->clients, list) {
 			if (aclient->cb)
 				aclient->cb(aclient->cb_data,
 						is_detach);
 		}
+		mutex_unlock(&aspace->list_lock);
 	}
-	mutex_unlock(&aspace->list_lock);
+
+out_free:
+	kfree(objs);
 }
 
 int msm_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
