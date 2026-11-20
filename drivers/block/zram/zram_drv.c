@@ -1186,10 +1186,8 @@ static void *zram_block_state_start(struct seq_file *seq, loff_t *pos)
 	}
 
 	nr_pages = zram->disksize >> PAGE_SHIFT;
-	if (*pos >= nr_pages) {
-		up_read(&zram->init_lock);
+	if (*pos >= nr_pages)
 		return NULL;
-	}
 
 	return pos;
 }
