@@ -485,9 +485,10 @@ int msm_gem_get_iova(struct drm_gem_object *obj,
 
 	*iova = vma->iova;
 
-	if (aspace &&  !msm_obj->in_active_list) {
+	if (aspace) {
 		mutex_lock(&aspace->list_lock);
-		msm_gem_add_obj_to_aspace_active_list(aspace, obj);
+		if (!msm_obj->in_active_list)
+			msm_gem_add_obj_to_aspace_active_list(aspace, obj);
 		mutex_unlock(&aspace->list_lock);
 	}
 
