@@ -154,9 +154,11 @@ int xiaomitouch_register_modedata(struct xiaomi_touch_interface *data)
 	struct xiaomi_touch_interface *touch_data = NULL;
 
 	if (!touch_pdata)
-		ret = -ENOMEM;
+		return -ENOMEM;
 
 	touch_data = touch_pdata->touch_data;
+	if (!touch_data)
+		return -ENOMEM;
 	MI_TOUCH_LOGI(1, "%s %s: \n", MI_TAG, __func__);
 
 	mutex_lock(&xiaomi_touch_dev.mutex);
@@ -649,6 +651,8 @@ static int xiaomi_touch_probe(struct platform_device *pdev)
 	ret = input_register_device(xiaomi_touch_dev.key_input_dev);
 	if (ret) {
 		MI_TOUCH_LOGE(1, "%s %s: register input device err:%d\n", MI_TAG, __func__, ret);
+		input_free_device(xiaomi_touch_dev.key_input_dev);
+		xiaomi_touch_dev.key_input_dev = NULL;
 		goto input_device_create_err;
 	}
 
@@ -696,7 +700,7 @@ sys_group_err:
 		pdata->touch_data = NULL;
 	}
 data_mem_err:
-	device_destroy(xiaomi_touch_dev.class, 0);
+	device_destroy(xiaomi_touch_dev.class, 'T');
 device_create_err:
 	class_destroy(xiaomi_touch_dev.class);
 class_create_err:
@@ -710,11 +714,11 @@ parse_dt_err:
 
 static int xiaomi_touch_remove(struct platform_device *pdev)
 {
-	device_destroy(xiaomi_touch_dev.class, 0);
+	device_destroy(xiaomi_touch_dev.class, 'T');
 	class_destroy(xiaomi_touch_dev.class);
 	misc_deregister(&xiaomi_touch_dev.misc_dev);
 	input_unregister_device(xiaomi_touch_dev.key_input_dev);
-	if (touch_pdata->touch_data) {
+	if (touch_pdata && touch_pdata->touch_data) {
 		kfree(touch_pdata->touch_data);
 		touch_pdata->touch_data = NULL;
 	}
