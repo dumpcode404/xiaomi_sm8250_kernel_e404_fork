@@ -1461,20 +1461,25 @@ static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
 
 	if (ts_data->dev->of_node) {
 		ret = fts_parse_dt(ts_data->dev, ts_data->pdata);
-		if (ret)
+		if (ret) {
 			FTS_ERROR("device-tree parse fail");
+			goto err_bus_init;
+		}
 	} else {
 		if (ts_data->dev->platform_data) {
 			memcpy(ts_data->pdata, ts_data->dev->platform_data, pdata_size);
 		} else {
 			FTS_ERROR("platform_data is null");
-			return -ENODEV;
+			ret = -ENODEV;
+			goto err_bus_init;
 		}
 	}
 
 	ts_data->ts_workqueue = create_singlethread_workqueue("fts_wq");
 	if (!ts_data->ts_workqueue) {
 		FTS_ERROR("create fts workqueue fail");
+		ret = -ENOMEM;
+		goto err_bus_init;
 	}
 
 	spin_lock_init(&ts_data->irq_lock);
