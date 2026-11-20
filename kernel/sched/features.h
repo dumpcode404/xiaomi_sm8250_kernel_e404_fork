@@ -23,7 +23,7 @@
  * Allow wakeup of tasks with a shorter slice to cancel RESPECT_SLICE for
  * current.
  */
-#define SCHED_FEAT_PREEMPT_SHORT 1
+#define SCHED_FEAT_PREEMPT_SHORT 0
 /*
  * Prefer to schedule the task we woke last (assuming it failed
  * wakeup-preemption), since its likely going to consume data we
@@ -38,7 +38,7 @@
  *   - yield_to_task()
  *   - cgroup dequeue / pick
  */
-#define SCHED_FEAT_PICK_BUDDY 1
+#define SCHED_FEAT_PICK_BUDDY 0
 
 /*
  * Consider buddies to be cache hot, decreases the likeliness of a
@@ -55,8 +55,8 @@
  *
  * DELAY_ZERO clips the lag on dequeue (or wakeup) to 0.
  */
-#define SCHED_FEAT_DELAY_DEQUEUE 1
-#define SCHED_FEAT_DELAY_ZERO 1
+#define SCHED_FEAT_DELAY_DEQUEUE 0
+#define SCHED_FEAT_DELAY_ZERO 0
 
 #define SCHED_FEAT_PARANOID_AVG 0
 
