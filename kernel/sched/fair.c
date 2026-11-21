@@ -1136,9 +1136,11 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq, bool protect)
 
 	/*
 	 * We can safely skip eligibility check if there is only one entity
-	 * in this cfs_rq, saving some cycles.
+	 * in this cfs_rq, saving some cycles. Hierarchical version: use
+	 * h_nr_queued so an upper cfs_rq wrapping a single sub-group does
+	 * not early-return while sibling tasks exist below it.
 	 */
-	if (cfs_rq->nr_queued == 1)
+	if (cfs_rq->h_nr_queued == 1)
 		return curr && curr->on_rq ? curr : se;
 
 	/*
@@ -5110,8 +5112,21 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 		 *   vl_i = (W + w_i)*vl'_i / W
 		 *        = (W*vl'_i + w_i*vl'_i) / W
 		 *        = vl'_i + w_i*vl'_i/W
+		 *
+		 * Guard the residual w_i*vl'_i the way 6.14+ does: divide
+		 * first when the multiply would overflow s64. Hot path
+		 * stays cheap and PARANOID_AVG stays off (no BUG_ON or
+		 * tree rebuild here).
 		 */
-		lag += div64_long(lag * weight, load);
+		{
+			s64 delta;
+
+			if (check_mul_overflow(lag, (s64)weight, &delta))
+				delta = div64_long(lag, load) * (s64)weight;
+			else
+				delta = div64_long(delta, load);
+			lag += delta;
+		}
 
 		/*
 		 * A heavy entity (relative to the tree) will pull the
