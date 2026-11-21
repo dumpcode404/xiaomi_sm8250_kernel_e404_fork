@@ -6504,9 +6504,13 @@ unsigned long mem_cgroup_shrink_node(struct mem_cgroup *memcg,
 		.may_shrinkslab = 1,
 	};
 	unsigned long lru_pages;
+	struct reclaim_state reclaim_state = {};
 
 	sc.gfp_mask = (gfp_mask & GFP_RECLAIM_MASK) |
 			(GFP_HIGHUSER_MOVABLE & ~GFP_RECLAIM_MASK);
+
+	reclaim_state.reclaimed_slab = 0;
+	current->reclaim_state = &reclaim_state;
 
 	trace_mm_vmscan_memcg_softlimit_reclaim_begin(sc.order,
 						      sc.may_writepage,
@@ -6524,6 +6528,7 @@ unsigned long mem_cgroup_shrink_node(struct mem_cgroup *memcg,
 
 	trace_mm_vmscan_memcg_softlimit_reclaim_end(sc.nr_reclaimed);
 
+	current->reclaim_state = NULL;
 	*nr_scanned = sc.nr_scanned;
 	return sc.nr_reclaimed;
 }
@@ -6538,6 +6543,7 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 	unsigned long pflags;
 	int nid;
 	unsigned int noreclaim_flag;
+	struct reclaim_state reclaim_state = {};
 	struct scan_control sc = {
 		.nr_to_reclaim = max(nr_pages, SWAP_CLUSTER_MAX),
 		.gfp_mask = (current_gfp_context(gfp_mask) & GFP_RECLAIM_MASK) |
@@ -6567,9 +6573,12 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 
 	psi_memstall_enter(&pflags);
 	noreclaim_flag = memalloc_noreclaim_save();
+	reclaim_state.reclaimed_slab = 0;
+	current->reclaim_state = &reclaim_state;
 
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
 
+	current->reclaim_state = NULL;
 	memalloc_noreclaim_restore(noreclaim_flag);
 	psi_memstall_leave(&pflags);
 
