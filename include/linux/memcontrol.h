@@ -383,6 +383,17 @@ static inline struct lruvec *mem_cgroup_lruvec(struct pglist_data *pgdat,
 	}
 
 	mz = mem_cgroup_nodeinfo(memcg, pgdat->node_id);
+	if (unlikely(!mz)) {
+		/*
+		 * The per-node info can be gone (e.g. dying/offline memcg
+		 * racing reclaim, or node onlined after memcg creation):
+		 * fall back to the node lruvec instead of dereferencing
+		 * NULL. A post-mortem of a shrink_node_memcg NULL+8 Oops
+		 * under forced memcg reclaim points at this dereference.
+		 */
+		lruvec = node_lruvec(pgdat);
+		goto out;
+	}
 	lruvec = &mz->lruvec;
 out:
 	/*
