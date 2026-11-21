@@ -1184,7 +1184,7 @@ static struct shrinker binder_shrinker = {
  */
 void binder_alloc_init(struct binder_alloc *alloc)
 {
-	alloc->pid = current->group_leader->pid;
+	alloc->pid = current->tgid;
 	spin_lock_init(&alloc->lock);
 	INIT_LIST_HEAD(&alloc->buffers);
 }
