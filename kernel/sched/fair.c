@@ -5659,8 +5659,8 @@ static inline int throttled_lb_pair(struct task_group *tg,
 {
 	struct cfs_rq *src_cfs_rq, *dest_cfs_rq;
 
-	src_cfs_rq = tg->cfs_rq[src_cpu];
-	dest_cfs_rq = tg->cfs_rq[dest_cpu];
+	src_cfs_rq = tg_cfs_rq(tg, src_cpu);
+	dest_cfs_rq = tg_cfs_rq(tg, dest_cpu);
 
 	return throttled_hierarchy(src_cfs_rq) ||
 	       throttled_hierarchy(dest_cfs_rq);
@@ -5831,6 +5831,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 	queued_delta = cfs_rq->h_nr_queued;
 	runnable_delta = cfs_rq->h_nr_runnable;
 	idle_delta = cfs_rq->h_nr_idle;
+	{
 	for_each_sched_entity(se, qcfs_rq) {
 		/* Handle any unfinished DELAY_DEQUEUE business first. */
 		if (se->sched_delayed) {
@@ -5850,7 +5851,9 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
 	}
+	}
 
+	{
 	for_each_sched_entity(se, qcfs_rq) {
 		update_load_avg(qcfs_rq, se, UPDATE_TG);
 		se_update_runnable(se);
@@ -5862,6 +5865,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
+	}
 	}
 
 	/* At this point se is NULL and we are at root level*/
@@ -6313,7 +6317,7 @@ static void __maybe_unused unthrottle_offline_cfs_rqs(struct rq *rq)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(tg, &task_groups, list) {
-		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu_of(rq))
+		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu_of(rq));
 
 		if (!cfs_rq->runtime_enabled)
 			continue;
