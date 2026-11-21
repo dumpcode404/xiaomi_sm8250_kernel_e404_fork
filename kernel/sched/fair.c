@@ -5738,6 +5738,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 	queued_delta = cfs_rq->h_nr_queued;
 	runnable_delta = cfs_rq->h_nr_runnable;
 	idle_delta = cfs_rq->h_nr_idle;
+	{
 	for_each_sched_entity(se, qcfs_rq) {
 		int flags;
 
@@ -5765,7 +5766,9 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 			break;
 		}
 	}
+	}
 
+	{
 	for_each_sched_entity(se, qcfs_rq) {
 		/* throttled entity or throttle-on-deactivate */
 		if (!se->on_rq)
@@ -5777,6 +5780,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 		qcfs_rq->h_nr_queued -= queued_delta;
 		qcfs_rq->h_nr_runnable -= runnable_delta;
 		qcfs_rq->h_nr_idle -= idle_delta;
+	}
 	}
 
 	/* At this point se is NULL and we are at root level*/
