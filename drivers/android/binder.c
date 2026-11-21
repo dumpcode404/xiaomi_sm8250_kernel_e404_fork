@@ -5352,7 +5352,8 @@ static int binder_open(struct inode *nodp, struct file *filp)
 	dbitmap_init(&proc->dmap);
 	spin_lock_init(&proc->inner_lock);
 	spin_lock_init(&proc->outer_lock);
-	proc->tsk = get_task_struct(current->group_leader);
+	get_task_struct(current->group_leader);
+	proc->tsk = current->group_leader;
 	proc->pid = current->tgid;
 	eproc->cred = get_cred(filp->f_cred);
 	INIT_LIST_HEAD(&proc->todo);
