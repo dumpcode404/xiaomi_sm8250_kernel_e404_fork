@@ -13,22 +13,6 @@ struct task_struct;
 struct rusage;
 union thread_union;
 
-/* All the bits taken by the old clone syscall. */
-#define CLONE_LEGACY_FLAGS 0xffffffffULL
-
-struct kernel_clone_args {
-	u64 flags;
-	int __user *pidfd;
-	int __user *child_tid;
-	int __user *parent_tid;
-	int exit_signal;
-	unsigned long stack;
-	unsigned long stack_size;
-	unsigned long tls;
-	pid_t *set_tid;
-	/* Number of elements in *set_tid */
-	size_t set_tid_size;
-};
 /*
  * This serializes "schedule()" and also protects
  * the run-queue from deletions/modifications (but
@@ -54,6 +38,7 @@ extern void sched_post_fork(struct task_struct *p);
 extern void sched_dead(struct task_struct *p);
 
 void __noreturn do_task_dead(void);
+void __noreturn make_task_dead(int signr);
 
 extern void proc_caches_init(void);
 
@@ -117,6 +102,7 @@ static inline void put_task_struct(struct task_struct *t)
 }
 
 struct task_struct *task_rcu_dereference(struct task_struct **ptask);
+void put_task_struct_rcu_user(struct task_struct *task);
 
 #ifdef CONFIG_ARCH_WANTS_DYNAMIC_TASK_STRUCT
 extern int arch_task_struct_size __read_mostly;

@@ -69,14 +69,12 @@ struct sched_domain_shared {
 	atomic_t	ref;
 	atomic_t	nr_busy_cpus;
 	int		has_idle_cores;
-
-	bool            overutilized;
 };
 
 struct sched_domain {
 	/* These fields must be setup */
-	struct sched_domain __rcu *parent;	/* top domain must be null terminated */
-	struct sched_domain __rcu *child;	/* bottom domain must be null terminated */
+	struct sched_domain *parent;	/* top domain must be null terminated */
+	struct sched_domain *child;	/* bottom domain must be null terminated */
 	struct sched_group *groups;	/* the balancing groups of the domain */
 	unsigned long min_interval;	/* Minimum balance interval ms */
 	unsigned long max_interval;	/* Maximum balance interval ms */
@@ -98,7 +96,6 @@ struct sched_domain {
 	unsigned int newidle_call;
 	unsigned int newidle_success;
 	unsigned int newidle_ratio;
-	unsigned int newidle_window_pos;
 	u64 newidle_stamp;
 	u64 max_newidle_lb_cost;
 	unsigned long last_decay_max_lb_cost;

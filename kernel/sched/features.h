@@ -9,11 +9,11 @@
 /*
  * Give new tasks half a slice to ease into the competition.
  */
-#define SCHED_FEAT_PLACE_DEADLINE_INITIAL 0
+#define SCHED_FEAT_PLACE_DEADLINE_INITIAL 1
 /*
  * Preserve relative virtual deadline on 'migration'.
  */
-#define SCHED_FEAT_PLACE_REL_DEADLINE 0
+#define SCHED_FEAT_PLACE_REL_DEADLINE 1
 /*
  * Inhibit (wakeup) preemption until the current task has either matched the
  * 0-lag point or until is has exhausted it's slice.
@@ -23,7 +23,7 @@
  * Allow wakeup of tasks with a shorter slice to cancel RESPECT_SLICE for
  * current.
  */
-#define SCHED_FEAT_PREEMPT_SHORT 0
+#define SCHED_FEAT_PREEMPT_SHORT 1
 /*
  * Prefer to schedule the task we woke last (assuming it failed
  * wakeup-preemption), since its likely going to consume data we
@@ -38,7 +38,7 @@
  *   - yield_to_task()
  *   - cgroup dequeue / pick
  */
-#define SCHED_FEAT_PICK_BUDDY 0
+#define SCHED_FEAT_PICK_BUDDY 1
 
 /*
  * Consider buddies to be cache hot, decreases the likeliness of a
@@ -55,7 +55,7 @@
  *
  * DELAY_ZERO clips the lag on dequeue (or wakeup) to 0.
  */
-#define SCHED_FEAT_DELAY_DEQUEUE 0
+#define SCHED_FEAT_DELAY_DEQUEUE 1
 #define SCHED_FEAT_DELAY_ZERO 0
 
 #define SCHED_FEAT_PARANOID_AVG 0
@@ -65,7 +65,8 @@
  */
 #define SCHED_FEAT_WAKEUP_PREEMPTION 1
 
-#define SCHED_FEAT_HRTICK 1
+#define SCHED_FEAT_HRTICK 0
+#define SCHED_FEAT_HRTICK_DL 0
 
 /*
  * Decrement CPU capacity based on time not spent running tasks
@@ -117,6 +118,13 @@
  */
 #define SCHED_FEAT_UTIL_EST 1
 
+
+/*
+ * Do newidle balancing proportional to its success rate using randomization.
+ */
+#define SCHED_FEAT_NI_RANDOM 1
+#define SCHED_FEAT_NI_RATE 1
+
 /*
  * Fast pre-selection of CPU candidates for EAS.
  */
@@ -135,27 +143,3 @@
  * Request max frequency from schedutil whenever a RT task is running.
  */
 #define SCHED_FEAT_SUGOV_RT_MAX_FREQ 0
-
-/*
- * Apply schedtune boost hold to tasks of all sched classes.
- * If enabled, schedtune will hold the boost applied to a CPU
- * for 50ms regardless of task activation - if the task is
- * still running 50ms later, the boost hold expires and schedtune
- * boost will expire immediately the task stops.
- * If disabled, this behaviour will only apply to tasks of the
- * RT class.
- */
-#define SCHED_FEAT_SCHEDTUNE_BOOST_HOLD_ALL 0
-
-/*
- * Inflate the effective utilization of SchedTune-boosted tasks, which
- * generally leads to usage of higher frequencies.
- * If disabled, boosts will only bias tasks to higher-capacity CPUs.
- */
-#define SCHED_FEAT_SCHEDTUNE_BOOST_UTIL 0
-
-/*
- * Do newidle balancing proportional to its success rate using randomization.
- */
-#define SCHED_FEAT_NI_RANDOM 1
-#define SCHED_FEAT_NI_RATE 1

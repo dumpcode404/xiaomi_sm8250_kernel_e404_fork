@@ -1,6 +1,26 @@
 #ifdef CONFIG_SMP
 #include "sched-pelt.h"
 
+/*
+ * PELT fast-ramp ("multiplier") toggle.
+ *
+ * When enabled (and EAS is active), skip PELT decay for the currently
+ * running entity so utilization ramps up much faster.  On some hardware
+ * this draws noticeably more power/heat, so it is off by default and
+ * toggled at runtime via the "sched_pelt_multiplier" sysctl.
+ */
+DECLARE_STATIC_KEY_FALSE(sched_pelt_multiplier);
+
+#define sched_pelt_multiplier_enabled() \
+	static_branch_unlikely(&sched_pelt_multiplier)
+
+/*
+ * Pelt uses apprixmate 'us' as ns/1024; and then uses time segments of 1024
+ * 'us'. As a result each segment is in fact '1<<20' ns.
+ */
+#define PELT_SEGMENT_NS		(1<<20)
+#define PELT_SEGMENT_MASK	(PELT_SEGMENT_NS-1)
+
 int __update_load_avg_blocked_se(u64 now, struct sched_entity *se);
 int __update_load_avg_se(u64 now, struct cfs_rq *cfs_rq, struct sched_entity *se);
 int __update_load_avg_cfs_rq(u64 now, struct cfs_rq *cfs_rq);
@@ -157,7 +177,7 @@ static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 {
 	u64 throttled;
 
-	if (unlikely(cfs_rq->pelt_clock_throttled))
+	if (unlikely(cfs_rq->throttle_count))
 		throttled = U64_MAX;
 	else
 		throttled = cfs_rq->throttled_clock_pelt_time;
@@ -168,7 +188,7 @@ static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 /* rq->task_clock normalized against any time this cfs_rq has spent throttled */
 static inline u64 cfs_rq_clock_pelt(struct cfs_rq *cfs_rq)
 {
-	if (unlikely(cfs_rq->pelt_clock_throttled))
+	if (unlikely(cfs_rq->throttle_count))
 		return cfs_rq->throttled_clock_pelt - cfs_rq->throttled_clock_pelt_time;
 
 	return rq_clock_pelt(rq_of(cfs_rq)) - cfs_rq->throttled_clock_pelt_time;

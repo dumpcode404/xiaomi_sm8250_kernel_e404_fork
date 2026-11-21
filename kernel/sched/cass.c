@@ -97,7 +97,8 @@ bool cass_prime_cpu(const struct cass_cpu_cand *c)
 static __always_inline
 bool cass_cpu_better(const struct cass_cpu_cand *a,
 		     const struct cass_cpu_cand *b, unsigned long p_util,
-		     int this_cpu, int prev_cpu, int prev_llc_id, bool sync)
+		     int this_cpu, int prev_cpu, int prev_llc_id, bool sync,
+		     unsigned int *nr_cands)
 {
 #define cass_cmp(a, b) ({ res = (a) - (b); })
 #define cass_eq(a, b) ({ res = (a) == (b); })
@@ -114,8 +115,8 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 		goto done;
 
 	/* Prefer the CPU that fits the task */
-	if (cass_cmp(fits_capacity(p_util, a->cap_max),
-		     fits_capacity(p_util, b->cap_max)))
+	if (cass_cmp(fits_capacity(p_util, a->cpu),
+		     fits_capacity(p_util, b->cpu)))
 		goto done;
 
 	/* Prefer the CPU that isn't the single fastest one in the system */
@@ -143,9 +144,15 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 	if (cass_cmp(!!a->exit_lat, !!b->exit_lat))
 		goto done;
 
-	/* Prefer the current CPU for sync wakes */
-	if (sync && (cass_eq(a->cpu, this_cpu) || !cass_cmp(b->cpu, this_cpu)))
-		goto done;
+	if (sync) {
+		/* Prefer the current CPU for sync wakes */
+		if (cass_eq(a->cpu, this_cpu))
+			goto done;
+		if (b->cpu == this_cpu) {
+			res = -1; /* Explicitly mark 'b' as winner to avoid res=0 tie */
+			goto done;
+		}
+	}
 
 	/* Prefer the CPU with higher capacity */
 	if (cass_cmp(a->cap, b->cap))
@@ -155,26 +162,39 @@ bool cass_cpu_better(const struct cass_cpu_cand *a,
 	if (cass_cmp(b->exit_lat, a->exit_lat))
 		goto done;
 
-	/* Prefer the previous CPU */
-	if (cass_eq(a->cpu, prev_cpu) || !cass_cmp(b->cpu, prev_cpu))
+	if (cass_eq(a->cpu, prev_cpu))
 		goto done;
+	if (b->cpu == prev_cpu) {
+		res = -1; /* Explicitly mark 'b' as winner to avoid res=0 tie */
+		goto done;
+	}
 
-	/*
-	 * Prefer the CPU that shares a cache with the previous CPU.
-	 *
-	 * prev_llc_id is negative when all CPUs share the same LLC (DynamIQ)
-	 * or when sched domains are torn down. In both cases, sd_llc_id cannot
-	 * differentiate candidates. So, we skip it.
-	 */
-	if (prev_llc_id >= 0 &&
-	    cass_cmp(per_cpu(sd_llc_id, a->cpu) == prev_llc_id,
-		     per_cpu(sd_llc_id, b->cpu) == prev_llc_id))
-		goto done;
+	if (prev_llc_id >= 0) {
+		/* Prefer the CPU that shares a cache with the previous CPU. */
+		if (cass_cmp(per_cpu(sd_llc_id, a->cpu) == prev_llc_id,
+			     per_cpu(sd_llc_id, b->cpu) == prev_llc_id))
+			goto done;
+	} else {
+		/*
+		 * LLC spans all CPUs (DynamIQ). Clear the residual 'res' value
+		 * from the previous CPU check so perfect ties evaluate to 0.
+		 */
+		res = 0;
+	}
 
 	/* @a isn't a better CPU than @b. @res must be <=0 to indicate such. */
 done:
-	/* @a is a better CPU than @b if @res is positive */
-	return res > 0;
+	/* Strictly better candidate found, reset the reservoir counter */
+	if (res > 0) {
+		*nr_cands = 1;
+		return true;
+	}
+
+	/* Perfect tie, apply reservoir sampling for a 1/N chance to swap */
+	if (res == 0 && !reciprocal_scale(sched_rng(), ++(*nr_cands)))
+		return true;
+
+	return false;
 }
 
 static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt)
@@ -182,6 +202,7 @@ static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt
 	/* Initialize @best such that @best always has a valid CPU at the end */
 	struct cass_cpu_cand cands[2], *best = cands;
 	int this_cpu = raw_smp_processor_id();
+	unsigned int nr_cands = 1;
 	unsigned long p_util, uc_min;
 	bool has_idle = false;
 	int cidx = 0, cpu, prev_llc_id;
@@ -325,7 +346,7 @@ static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt
 		 */
 		if (best == curr ||
 		    cass_cpu_better(curr, best, p_util, this_cpu, prev_cpu,
-				    prev_llc_id, sync)) {
+				    prev_llc_id, sync, &nr_cands)) {
 			best = curr;
 			cidx ^= 1;
 		}
@@ -340,7 +361,7 @@ static int cass_select_task_rq(struct task_struct *p, int prev_cpu,
 	bool sync;
 
 	/* Don't balance on exec since we don't know what @p will look like */
-	if (wake_flags & SD_BALANCE_EXEC)
+	if (wake_flags & WF_EXEC)
 		return prev_cpu;
 
 	/*
@@ -352,7 +373,7 @@ static int cass_select_task_rq(struct task_struct *p, int prev_cpu,
 		return cpumask_first(&p->cpus_allowed);
 
 	/* cass_best_cpu() needs the CFS task's utilization, so sync it up */
-	if (!rt && !(wake_flags & SD_BALANCE_FORK))
+	if (!rt && !(wake_flags & WF_FORK))
 		sync_entity_load_avg(&p->se);
 
 	sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
@@ -365,7 +386,8 @@ static int cass_select_task_rq_fair(struct task_struct *p, int prev_cpu,
 	return cass_select_task_rq(p, prev_cpu, wake_flags, false);
 }
 
-int cass_select_task_rq_rt(struct task_struct *p, int prev_cpu, int wake_flags)
+int cass_select_task_rq_rt(struct task_struct *p, int prev_cpu,
+ 			   int wake_flags)
 {
 	return cass_select_task_rq(p, prev_cpu, wake_flags, true);
 }

@@ -775,11 +775,6 @@ struct task_struct {
 
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
-#ifdef CONFIG_CFS_BANDWIDTH
-	struct callback_head		sched_throttle_work;
-	struct list_head		throttle_node;
-	bool				throttled;
-#endif
 #endif
 	struct sched_dl_entity		dl;
 
@@ -845,7 +840,7 @@ struct task_struct {
 	struct mm_struct		*mm;
 	struct mm_struct		*active_mm;
 
-	/* KABI dummy padding - do not use. */
+	/* Per-thread vma caching: */
 	struct vmacache			vmacache;
 
 #ifdef SPLIT_RSS_COUNTING
@@ -866,7 +861,6 @@ struct task_struct {
 	unsigned			sched_reset_on_fork:1;
 	unsigned			sched_contributes_to_load:1;
 	unsigned			sched_migrated:1;
-	unsigned			sched_remote_wakeup:1;
 #ifdef CONFIG_PSI
 	unsigned			sched_psi_wake_requeue:1;
 #endif
@@ -875,6 +869,21 @@ struct task_struct {
 	unsigned			:0;
 
 	/* Unserialized, strictly 'current' */
+
+	/*
+	 * This field must not be in the scheduler word above due to wakelist
+	 * queueing no longer being serialized by p->on_cpu. However:
+	 *
+	 * p->XXX = X;			ttwu()
+	 * schedule()			  if (p->on_rq && ..) // false
+	 *   smp_mb__after_spinlock();	  if (smp_load_acquire(&p->on_cpu) && //true
+	 *   deactivate_task()		      ttwu_queue_wakelist())
+	 *     p->on_rq = 0;			p->sched_remote_wakeup = Y;
+	 *
+	 * guarantees all stores of 'current' are visible before
+	 * ->sched_remote_wakeup gets used, so it can be in this word.
+	 */
+	unsigned			sched_remote_wakeup:1;
 
 	/* Bit to tell LSMs we're in execve(): */
 	unsigned			in_execve:1;
@@ -1256,7 +1265,10 @@ struct task_struct {
 
 	struct tlbflush_unmap_batch	tlb_ubc;
 
-	struct rcu_head			rcu;
+	union {
+		refcount_t		rcu_users;
+		struct rcu_head		rcu;
+	};
 
 	/* Cache last used pipe for splice(): */
 	struct pipe_inode_info		*splice_pipe;
@@ -1411,12 +1423,7 @@ struct task_struct {
 	struct mutex			futex_exit_mutex;
 #endif
 
-	/* bca62a0ae565 ("sched/tune: Fix improper accounting of tasks") */
-#ifdef CONFIG_SCHED_TUNE
-	ANDROID_KABI_USE(7, int stune_idx);
-#else
 	ANDROID_KABI_RESERVE(7);
-#endif
 	ANDROID_KABI_RESERVE(8);
 
 #ifdef CONFIG_ANDROID_SIMPLE_LMK
@@ -1782,7 +1789,7 @@ extern struct task_struct *idle_task(int cpu);
  *
  * Return: 1 if @p is an idle task. 0 otherwise.
  */
-static inline bool is_idle_task(const struct task_struct *p)
+static __always_inline bool is_idle_task(const struct task_struct *p)
 {
 	return !!(p->flags & PF_IDLE);
 }

@@ -177,16 +177,9 @@ static u64 psi_period __read_mostly;
 
 /* System-level pressure and stall tracking */
 static DEFINE_PER_CPU(struct psi_group_cpu, system_group_pcpu);
-struct psi_group psi_system = {
+static struct psi_group psi_system = {
 	.pcpu = &system_group_pcpu,
 };
-
-struct psi_event_info {
-	u64 last_event_time;
-	u64 last_event_growth;
-};
-/* ioctl cmd to get info of  last psi trigger event*/
-#define GET_LAST_PSI_EVENT_INFO _IOR('p', 1, struct psi_event_info)
 
 static void psi_avgs_work(struct work_struct *work);
 
@@ -550,13 +543,12 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 		if (now < t->last_event_time + t->win.size)
 			continue;
 
-		t->last_event_time = now;
-		t->last_event_growth = growth;
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
 			trace_psi_update_trigger_wake_up(t, growth);
 			wake_up_interruptible(&t->event_wait);
 		}
+		t->last_event_time = now;
 	}
 
 	if (new_stall)
@@ -1065,14 +1057,10 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	t->event = 0;
 	t->last_event_time = 0;
 	init_waitqueue_head(&t->event_wait);
-	kref_init(&t->refcount);
 
 	mutex_lock(&group->trigger_lock);
 
 	if (!rcu_access_pointer(group->poll_kworker)) {
-		struct sched_param param = {
-			.sched_priority = 1,
-		};
 		struct kthread_worker *kworker;
 
 		kworker = kthread_create_worker(0, "psimon");
@@ -1081,7 +1069,7 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 			mutex_unlock(&group->trigger_lock);
 			return ERR_CAST(kworker);
 		}
-		sched_setscheduler_nocheck(kworker->task, SCHED_FIFO, &param);
+		sched_set_fifo_low(kworker->task);
 		kthread_init_delayed_work(&group->poll_work,
 				psi_poll_work);
 		rcu_assign_pointer(group->poll_kworker, kworker);
@@ -1098,20 +1086,25 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	return t;
 }
 
-static void psi_trigger_destroy(struct kref *ref)
+void psi_trigger_destroy(struct psi_trigger *t)
 {
-	struct psi_trigger *t = container_of(ref, struct psi_trigger, refcount);
-	struct psi_group *group = t->group;
+	struct psi_group *group;
 	struct kthread_worker *kworker_to_destroy = NULL;
 
-	if (static_branch_likely(&psi_disabled))
+	/*
+	 * We do not check psi_disabled since it might have been disabled after
+	 * the trigger got created.
+	 */
+	if (!t)
 		return;
 
+	group = t->group;
 	/*
-	 * Wakeup waiters to stop polling. Can happen if cgroup is deleted
-	 * from under a polling process.
+	 * Wakeup waiters to stop polling and clear the queue to prevent it from
+	 * being accessed later. Can happen if cgroup is deleted from under a
+	 * polling process.
 	 */
-	wake_up_interruptible(&t->event_wait);
+	wake_up_pollfree(&t->event_wait);
 
 	mutex_lock(&group->trigger_lock);
 
@@ -1141,9 +1134,9 @@ static void psi_trigger_destroy(struct kref *ref)
 	mutex_unlock(&group->trigger_lock);
 
 	/*
-	 * Wait for both *trigger_ptr from psi_trigger_replace and
-	 * poll_kworker RCUs to complete their read-side critical sections
-	 * before destroying the trigger and optionally the poll_kworker
+	 * Wait for psi_schedule_poll_work RCU to complete its read-side
+	 * critical section before destroying the trigger and optionally the
+	 * poll_task.
 	 */
 	synchronize_rcu();
 	/*
@@ -1165,18 +1158,6 @@ static void psi_trigger_destroy(struct kref *ref)
 	kfree(t);
 }
 
-void psi_trigger_replace(void **trigger_ptr, struct psi_trigger *new)
-{
-	struct psi_trigger *old = *trigger_ptr;
-
-	if (static_branch_likely(&psi_disabled))
-		return;
-
-	rcu_assign_pointer(*trigger_ptr, new);
-	if (old)
-		kref_put(&old->refcount, psi_trigger_destroy);
-}
-
 __poll_t psi_trigger_poll(void **trigger_ptr,
 				struct file *file, poll_table *wait)
 {
@@ -1186,23 +1167,14 @@ __poll_t psi_trigger_poll(void **trigger_ptr,
 	if (static_branch_likely(&psi_disabled))
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
-	rcu_read_lock();
-
-	t = rcu_dereference(*(void __rcu __force **)trigger_ptr);
-	if (!t) {
-		rcu_read_unlock();
+	t = smp_load_acquire(trigger_ptr);
+	if (!t)
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
-	}
-	kref_get(&t->refcount);
-
-	rcu_read_unlock();
 
 	poll_wait(file, &t->event_wait, wait);
 
 	if (cmpxchg(&t->event, 1, 0) == 1)
 		ret |= EPOLLPRI;
-
-	kref_put(&t->refcount, psi_trigger_destroy);
 
 	return ret;
 }
@@ -1227,14 +1199,24 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 
 	buf[buf_size - 1] = '\0';
 
-	new = psi_trigger_create(&psi_system, buf, nbytes, res);
-	if (IS_ERR(new))
-		return PTR_ERR(new);
-
 	seq = file->private_data;
+
 	/* Take seq->lock to protect seq->private from concurrent writes */
 	mutex_lock(&seq->lock);
-	psi_trigger_replace(&seq->private, new);
+
+	/* Allow only one trigger per file descriptor */
+	if (seq->private) {
+		mutex_unlock(&seq->lock);
+		return -EBUSY;
+	}
+
+	new = psi_trigger_create(&psi_system, buf, nbytes, res);
+	if (IS_ERR(new)) {
+		mutex_unlock(&seq->lock);
+		return PTR_ERR(new);
+	}
+
+	smp_store_release(&seq->private, new);
 	mutex_unlock(&seq->lock);
 
 	return nbytes;
@@ -1265,48 +1247,11 @@ static __poll_t psi_fop_poll(struct file *file, poll_table *wait)
 	return psi_trigger_poll(&seq->private, file, wait);
 }
 
-static long psi_fop_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	struct seq_file *seq = file->private_data;
-	struct psi_trigger *t;
-	long ret;
-	void __user *ubuf = (void __user *)arg;
-
-	if (static_branch_likely(&psi_disabled))
-		return -EOPNOTSUPP;
-
-	switch (cmd) {
-	case GET_LAST_PSI_EVENT_INFO: {
-		struct psi_event_info last_event_info;
-		rcu_read_lock();
-		t = rcu_dereference(*(void __rcu __force **)&seq->private);
-		if (t) {
-			last_event_info.last_event_time = t->last_event_time;
-			last_event_info.last_event_growth = t->last_event_growth;
-			ret = 0;
-		} else {
-			ret = -EFAULT;
-		}
-		rcu_read_unlock();
-		if (!ret) {
-			if (copy_to_user(ubuf, &last_event_info,
-				sizeof(last_event_info)))
-				ret = -EFAULT;
-		}
-		break;
-	}
-	default:
-		ret = -EINVAL;
-		break;
-	}
-	return ret;
-}
-
 static int psi_fop_release(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 
-	psi_trigger_replace(&seq->private, NULL);
+	psi_trigger_destroy(seq->private);
 	return single_release(inode, file);
 }
 
@@ -1317,8 +1262,6 @@ static const struct file_operations psi_io_fops = {
 	.write          = psi_io_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
-	.unlocked_ioctl = psi_fop_ioctl,
-	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static const struct file_operations psi_memory_fops = {
@@ -1328,8 +1271,6 @@ static const struct file_operations psi_memory_fops = {
 	.write          = psi_memory_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
-	.unlocked_ioctl = psi_fop_ioctl,
-	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static const struct file_operations psi_cpu_fops = {
@@ -1339,8 +1280,6 @@ static const struct file_operations psi_cpu_fops = {
 	.write          = psi_cpu_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
-	.unlocked_ioctl = psi_fop_ioctl,
-	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static int __init psi_proc_init(void)

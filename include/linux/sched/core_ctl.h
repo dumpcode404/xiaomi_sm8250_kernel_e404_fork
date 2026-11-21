@@ -30,3 +30,4 @@ static inline int core_ctl_set_boost(bool boost)
 static inline void core_ctl_notifier_register(struct notifier_block *n) {}
 static inline void core_ctl_notifier_unregister(struct notifier_block *n) {}
 #endif
+#endif
