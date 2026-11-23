@@ -25,7 +25,6 @@
 #include <linux/pagemap.h>
 #include <linux/init.h>
 #include <linux/highmem.h>
-#include <linux/simple_lmk.h>
 #include <linux/vmpressure.h>
 #include <linux/vmstat.h>
 #include <linux/file.h>
@@ -6052,9 +6051,6 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 
 	} while (should_continue_reclaim(pgdat, sc->nr_reclaimed - nr_reclaimed,
 					 sc->nr_scanned - nr_scanned, sc));
-
-	if (sc->priority < DEF_PRIORITY / 2)
-		simple_lmk_reclaim_needed(sc->order, !current_is_kswapd());
 
 	/*
 	 * Kswapd gives up on balancing particular nodes after too

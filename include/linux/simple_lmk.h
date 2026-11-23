@@ -5,19 +5,13 @@
 #ifndef _SIMPLE_LMK_H_
 #define _SIMPLE_LMK_H_
 
-#include <linux/types.h>
-
 struct mm_struct;
 
 #ifdef CONFIG_ANDROID_SIMPLE_LMK
 void simple_lmk_mm_freed(struct mm_struct *mm);
-void simple_lmk_reclaim_needed(int order, bool direct);
 #else
-static inline void simple_lmk_mm_freed(struct mm_struct *mm) {}
-static inline void simple_lmk_reclaim_needed(int order, bool direct)
+static inline void simple_lmk_mm_freed(struct mm_struct *mm)
 {
-	(void)order;
-	(void)direct;
 }
 #endif
 
