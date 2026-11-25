@@ -110,8 +110,9 @@ jobs:
 
       - name: Clone AnyKernel3
         run: |
-          git clone --depth=1 \
-            https://github.com/kvsnr113/AnyKernel3.git AnyKernel3
+          # dumpcode404 fork, pinned (branch oplus = kvsnr113 main + OPLUS Port support, OPLUS_BUILD guard)
+          git clone https://github.com/dumpcode404/AnyKernel3.git AnyKernel3
+          git -C AnyKernel3 checkout --detach 36dc1f9f1165bdb0a0fb5ac68983e313952efcd7
 
       - name: Package Kernel
         run: |
