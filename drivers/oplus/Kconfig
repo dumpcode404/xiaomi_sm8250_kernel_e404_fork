@@ -9,7 +9,8 @@ config OPLUS_PORT
 
 config OPLUS_OPROJECT
 	bool "oplus project"
-	default y if OPLUS_PORT
+	depends on OPLUS_PORT
+	default y
 	help
 	 define this config to define oplus project
 	  
