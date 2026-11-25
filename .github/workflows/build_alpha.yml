@@ -152,21 +152,37 @@ jobs:
         run: |
           set -euo pipefail
 
+          # OPLUS variant: all three symbols must be =y AND all three objects must have been built.
+          # (A =y OPLUS_PORT alone is not enough: that once passed while two objects were missing.)
           if [ "$VARIANT" = "oplus" ]; then
-            if [ -f drivers/oplus/Kconfig ]; then
-              if ! grep -q '^CONFIG_OPLUS_PORT=y$' out/.config; then
-                echo "::error::variant=oplus but CONFIG_OPLUS_PORT=y is not in out/.config"
-                exit 1
+            fail=0
+            for sym in CONFIG_OPLUS_PORT CONFIG_OPLUS_OPROJECT CONFIG_OPLUS_STUB_NODES; do
+              if ! grep -q "^${sym}=y$" out/.config; then
+                echo "::error::variant=oplus: ${sym} is not =y in out/.config"
+                fail=1
               fi
-              echo "oplus variant: CONFIG_OPLUS_PORT=y verified"
-            else
-              echo "::warning::variant=oplus but drivers/oplus is not in this branch yet; building without OPLUS_PORT"
-            fi
+            done
+            for obj in oplus_project.o oemports10t.o oplus_stub_nodes.o; do
+              if [ ! -s "out/drivers/oplus/${obj}" ]; then
+                echo "::error::variant=oplus: out/drivers/oplus/${obj} is missing or empty"
+                fail=1
+              fi
+            done
+            if [ "$fail" -ne 0 ]; then exit 1; fi
+            ls -l out/drivers/oplus/*.o
+            echo "oplus variant verified: 3 symbols =y and 3 objects built"
           else
-            if grep -q '^CONFIG_OPLUS_PORT=y$' out/.config; then
-              echo "::error::standard variant must not have CONFIG_OPLUS_PORT=y"
+            if grep -qE '^CONFIG_OPLUS_(PORT|OPROJECT|STUB_NODES)=y$' out/.config; then
+              echo "::error::standard variant must not enable any CONFIG_OPLUS_* symbol"
               exit 1
             fi
+            for obj in oplus_project.o oemports10t.o oplus_stub_nodes.o; do
+              if [ -e "out/drivers/oplus/${obj}" ]; then
+                echo "::error::standard variant must not build out/drivers/oplus/${obj}"
+                exit 1
+              fi
+            done
+            echo "standard variant verified: no OPLUS symbol or object"
           fi
 
           test -s out/vmlinux
