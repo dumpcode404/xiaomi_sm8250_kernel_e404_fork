@@ -92,9 +92,32 @@ jobs:
       - name: Setup KernelSU
         working-directory: kernel
         run: |
+          set -eu
           echo "=== Setup KernelSU ==="
 
-          curl -LSs https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash -
+          # backslashxx/KernelSU was deleted. This commit is the one CI built before (v3.3.1+,
+          # KSU_VERSION 32733). A git SHA covers the whole tree and history, so the pin makes the
+          # mirror's content verifiable. Never follow the mirror's branches.
+          KSU_SHA=9a02a5c1e552fb21cdb505c3c0428901eca43848
+          git clone https://github.com/Najip/xxKSU KernelSU
+          git -C KernelSU checkout --detach "$KSU_SHA"
+          KSU_HEAD="$(git -C KernelSU rev-parse HEAD)"
+          if [ "$KSU_HEAD" != "$KSU_SHA" ]; then
+            echo "::error::KernelSU HEAD $KSU_HEAD does not match the pinned $KSU_SHA"
+            exit 1
+          fi
+          echo "KernelSU pinned at $KSU_HEAD"
+
+          # Same steps as upstream kernel/setup.sh
+          if [ -e drivers/kernelsu ] && [ ! -L drivers/kernelsu ]; then
+            echo "::error::drivers/kernelsu already exists in the tree"
+            exit 1
+          fi
+          ln -sfn ../KernelSU/kernel drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig
+          grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
           echo "=== Verify KernelSU ==="
           grep -R "KernelSU" -n drivers 2>/dev/null | head || true
