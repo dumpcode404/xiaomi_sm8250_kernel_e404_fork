@@ -10070,7 +10070,6 @@ static void typec_src_removal(struct smb_charger *chg)
 	chg->cc_un_compliant_detected = false;
 	chg->report_input_absent = false;
 	chg->qc3_raise_done = false;
-	chg->thermal_remove = false;
 	chg->enable_bypass = 1;
 
 	if (chg->pd_verifed) {
@@ -12607,6 +12606,13 @@ int smblib_init(struct smb_charger *chg)
 {
 	union power_supply_propval prop_val;
 	int rc = 0;
+
+	/*
+	 * Ignore the charge thermal level requested by userspace by default.
+	 * Writable at runtime through the thermal_remove sysfs attribute. The
+	 * JEITA limits do not use this level and stay in effect.
+	 */
+	chg->thermal_remove = true;
 
 	mutex_init(&chg->smb_lock);
 	mutex_init(&chg->irq_status_lock);
