@@ -162,34 +162,12 @@ static int cpufreq_thermal_notifier(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
+/*
+ * Backend of the thermal_message/cpu_limits sysfs node, only used by the
+ * userspace thermal daemon. Its CPU frequency limits are ignored.
+ */
 void cpu_limits_set_level(unsigned int cpu, unsigned int max_freq)
 {
-	struct cpufreq_cooling_device *cpufreq_cdev;
-	struct thermal_cooling_device *cdev;
-	unsigned int cdev_cpu;
-	unsigned int level;
-
-	list_for_each_entry(cpufreq_cdev, &cpufreq_cdev_list, node) {
-		sscanf(cpufreq_cdev->cdev->type, "thermal-cpufreq-%d", &cdev_cpu);
-		if (cdev_cpu == cpu) {
-			/*
-			 * Find the lowest level that covers the limit. A limit
-			 * above the highest level restricts nothing, so it ends
-			 * at the highest level (cooling state 0) and releases
-			 * any earlier cap.
-			 */
-			for (level = 0; level < cpufreq_cdev->max_level; level++) {
-				int target_freq = cpufreq_cdev->em->table[level].frequency;
-
-				if (max_freq <= target_freq)
-					break;
-			}
-			cdev = cpufreq_cdev->cdev;
-			if (cdev)
-				cdev->ops->set_cur_state(cdev, cpufreq_cdev->max_level - level);
-			break;
-		}
-	}
 }
 
 #ifdef CONFIG_ENERGY_MODEL
@@ -627,6 +605,16 @@ static struct thermal_cooling_device_ops cpufreq_cooling_ops = {
 	.set_min_state = cpufreq_set_min_state,
 	.get_min_state = cpufreq_get_min_state,
 };
+
+/**
+ * cpufreq_cooling_is_cpufreq_cdev - is this a CPU frequency cooling device?
+ * @cdev: thermal cooling device to check.
+ */
+bool cpufreq_cooling_is_cpufreq_cdev(struct thermal_cooling_device *cdev)
+{
+	return cdev->ops == &cpufreq_cooling_ops ||
+	       cdev->ops == &cpufreq_power_cooling_ops;
+}
 
 /* Notifier for cpufreq policy change */
 static struct notifier_block thermal_cpufreq_notifier_block = {
