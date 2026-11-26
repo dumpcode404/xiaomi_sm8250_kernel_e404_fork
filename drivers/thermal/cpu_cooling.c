@@ -32,6 +32,7 @@
 #include <linux/cpu.h>
 #include <linux/cpu_cooling.h>
 #include <linux/energy_model.h>
+#include <linux/fie.h>
 #include <linux/of_device.h>
 
 #include <trace/events/thermal.h>
@@ -438,7 +439,7 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 	cpufreq_cdev->clipped_freq = clip_freq;
 
 	cpus = cpufreq_cdev->policy->related_cpus;
-	arch_update_thermal_pressure(cpus, clip_freq);
+	fie_cooling_pressure(cpus, clip_freq);
 
 	/* Check if the device has a platform mitigation function that
 	 * can handle the CPU freq mitigation, if not, notify cpufreq

@@ -133,6 +133,7 @@ static DEFINE_PER_CPU_READ_MOSTLY(u32, cpu_max_freq);
 enum cpu_throttle_src {
 	CPU_CPUFREQ_THROTTLE,
 	CPU_HW_THROTTLE,
+	CPU_COOLING_THROTTLE,
 	MAX_CPU_THROTTLE_SRCS
 };
 
@@ -487,6 +488,24 @@ void fie_cpufreq_pressure(int cpu, unsigned int cap)
 	raw_spin_unlock_irqrestore(&t->throt_lock, flags);
 }
 EXPORT_SYMBOL_GPL(fie_cpufreq_pressure);
+
+void fie_cooling_pressure(const struct cpumask *cpus, unsigned int cap)
+{
+	struct throt_data *t = per_cpu(domain_throt_data, cpumask_first(cpus));
+	unsigned long flags;
+
+	/* Without a FIE domain nothing else aggregates, so apply it directly */
+	if (!t) {
+		arch_update_thermal_pressure(cpus, cap);
+		return;
+	}
+
+	/* Update the throttle requested through the cpufreq cooling device */
+	raw_spin_lock_irqsave(&t->throt_lock, flags);
+	update_thermal_pressure(t, CPU_COOLING_THROTTLE, cap);
+	raw_spin_unlock_irqrestore(&t->throt_lock, flags);
+}
+EXPORT_SYMBOL_GPL(fie_cooling_pressure);
 
 void fie_rate_set(int cpu, unsigned int freq)
 {
