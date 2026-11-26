@@ -95,11 +95,16 @@ jobs:
           set -eu
           echo "=== Setup KernelSU ==="
 
-          # backslashxx/KernelSU was deleted. This commit is the one CI built before (v3.3.1+,
-          # KSU_VERSION 32733). A git SHA covers the whole tree and history, so the pin makes the
-          # mirror's content verifiable. Never follow the mirror's branches.
-          KSU_SHA=9a02a5c1e552fb21cdb505c3c0428901eca43848
-          git clone https://github.com/Najip/xxKSU KernelSU
+          # Driver branch of re-noroi/KernelSU, locked to one commit. A git SHA covers
+          # the whole tree and history; the branch is never followed. If the branch is
+          # moved or rewritten later, the commit is fetched by its SHA.
+          KSU_REPO=https://github.com/re-noroi/KernelSU
+          KSU_BRANCH=xxksu-driver
+          KSU_SHA=037e828945e082ddab83a0266f1ed8315e4386fd
+          git clone --single-branch --branch "$KSU_BRANCH" "$KSU_REPO" KernelSU
+          if ! git -C KernelSU cat-file -e "${KSU_SHA}^{commit}" 2>/dev/null; then
+            git -C KernelSU fetch origin "$KSU_SHA"
+          fi
           git -C KernelSU checkout --detach "$KSU_SHA"
           KSU_HEAD="$(git -C KernelSU rev-parse HEAD)"
           if [ "$KSU_HEAD" != "$KSU_SHA" ]; then
