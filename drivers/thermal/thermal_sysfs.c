@@ -13,6 +13,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/sysfs.h>
+#include <linux/cpu_cooling.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -813,6 +814,14 @@ cur_state_store(struct device *dev, struct device_attribute *attr,
 
 	if ((long)state < 0)
 		return -EINVAL;
+
+	/*
+	 * Ignore CPU frequency limits requested by userspace. The write is
+	 * reported as successful, but the request stays at state 0, so only
+	 * the kernel thermal governors can cool through these devices.
+	 */
+	if (cpufreq_cooling_is_cpufreq_cdev(cdev))
+		return count;
 
 	mutex_lock(&cdev->lock);
 	cdev->sysfs_cur_state_req = state;

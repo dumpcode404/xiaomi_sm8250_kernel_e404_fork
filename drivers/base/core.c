@@ -1721,10 +1721,6 @@ static ssize_t online_store(struct device *dev, struct device_attribute *attr,
 {
 	bool val;
 	int ret;
-	extern atomic_t switch_mode;
-
-	if (!atomic_read(&switch_mode))
-		return -EPERM;
 
 	ret = strtobool(buf, &val);
 	if (ret < 0)

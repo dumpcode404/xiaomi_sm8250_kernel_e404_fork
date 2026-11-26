@@ -151,22 +151,16 @@ static unsigned long limits_mitigation_notify(struct cpufreq_qcom *c,
 					bool limit)
 {
 	struct cpufreq_policy *policy;
-	u32 cpu;
 	unsigned long freq;
-	unsigned long max_capacity, capacity;
+	u32 cpu;
 
 	cpu = cpumask_first(&c->related_cpus);
 	policy = cpufreq_cpu_get_raw(cpu);
-	capacity = max_capacity = arch_scale_cpu_capacity(cpu);
 
 	if (limit) {
 		freq = readl_relaxed(c->reg_bases[REG_DOMAIN_STATE]) &
 				GENMASK(7, 0);
 		freq = DIV_ROUND_CLOSEST_ULL(freq * c->xo_rate, 1000);
-		if (policy) {
-			capacity = freq * max_capacity;
-			capacity /= policy->cpuinfo.max_freq;
-		}
 	} else {
 		if (!policy)
 			freq = U32_MAX;
@@ -174,21 +168,17 @@ static unsigned long limits_mitigation_notify(struct cpufreq_qcom *c,
 			freq = policy->cpuinfo.max_freq;
 	}
 
-	arch_set_thermal_pressure(&c->related_cpus, max_t(unsigned long, 0,
-				  max_capacity - capacity));
-
 	/*
-	 * Adapted from re-noroi c828914f9: route the LMh-reported limit
-	 * through FIE's thermal pressure aggregation (combined with FIE's
-	 * own HW-throttle measurement). Skip redundant updates when the
-	 * reported limit hasn't changed. E404's direct arch_set_thermal_
-	 * pressure() above is kept so scheduler behavior is unchanged
-	 * even if FIE has no domain data for these CPUs yet.
+	 * Report the LMh limit to FIE only. FIE combines it with the measured
+	 * hardware throttle and the cpufreq cooling cap and is the single
+	 * writer of the thermal pressure for this domain. Without a policy
+	 * there is no limit to apply. Skip redundant updates when the reported
+	 * limit hasn't changed.
 	 */
-	if (policy && c->last_lmh_freq != freq) {
+	if (c->last_lmh_freq != freq) {
 		c->last_lmh_freq = freq;
 		fie_cpufreq_pressure(cpu,
-				     freq >= policy->cpuinfo.max_freq ?
+				     !policy || freq >= policy->cpuinfo.max_freq ?
 				     UINT_MAX : (unsigned int)freq);
 	}
 

@@ -68,7 +68,16 @@ cpufreq_platform_cooling_register(struct cpufreq_policy *policy,
  */
 void cpufreq_cooling_unregister(struct thermal_cooling_device *cdev);
 
+bool cpufreq_cooling_is_cpufreq_cdev(struct thermal_cooling_device *cdev);
+
 #else /* !CONFIG_CPU_THERMAL */
+
+static inline bool
+cpufreq_cooling_is_cpufreq_cdev(struct thermal_cooling_device *cdev)
+{
+	return false;
+}
+
 static inline struct thermal_cooling_device *
 cpufreq_cooling_register(struct cpufreq_policy *policy)
 {
