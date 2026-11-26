@@ -4472,10 +4472,16 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
 	void __iomem *maddr;
 	int offset = addr & (PAGE_SIZE-1);
 
+	/*
+	 * Limit access to one page at a time, as that's what follow_phys()
+	 * guarantees; expect the caller to retry to read larger ranges.
+	 */
+	len = min_t(int, len, PAGE_SIZE - offset);
+
 	if (follow_phys(vma, addr, write, &prot, &phys_addr))
 		return -EINVAL;
 
-	maddr = ioremap_prot(phys_addr, PAGE_ALIGN(len + offset), prot);
+	maddr = ioremap_prot(phys_addr, PAGE_SIZE, prot);
 	if (!maddr)
 		return -ENOMEM;
 
