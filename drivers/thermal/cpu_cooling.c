@@ -172,15 +172,21 @@ void cpu_limits_set_level(unsigned int cpu, unsigned int max_freq)
 	list_for_each_entry(cpufreq_cdev, &cpufreq_cdev_list, node) {
 		sscanf(cpufreq_cdev->cdev->type, "thermal-cpufreq-%d", &cdev_cpu);
 		if (cdev_cpu == cpu) {
-			for (level = 0; level <= cpufreq_cdev->max_level; level++) {
+			/*
+			 * Find the lowest level that covers the limit. A limit
+			 * above the highest level restricts nothing, so it ends
+			 * at the highest level (cooling state 0) and releases
+			 * any earlier cap.
+			 */
+			for (level = 0; level < cpufreq_cdev->max_level; level++) {
 				int target_freq = cpufreq_cdev->em->table[level].frequency;
-				if (max_freq <= target_freq) {
-					cdev = cpufreq_cdev->cdev;
-					if (cdev)
-						cdev->ops->set_cur_state(cdev, cpufreq_cdev->max_level - level);
+
+				if (max_freq <= target_freq)
 					break;
-				}
 			}
+			cdev = cpufreq_cdev->cdev;
+			if (cdev)
+				cdev->ops->set_cur_state(cdev, cpufreq_cdev->max_level - level);
 			break;
 		}
 	}
