@@ -399,7 +399,7 @@ static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util, int cp
 	if (READ_ONCE(sysctl_hr_scaling)) {
 		scale = READ_ONCE(*sg_cpu->sysctl_scale);
 		if (scale)
-			mult = (100 + scale) / 100;
+			mult = 100 + scale;
 	}
 
 	headroom = (headroom * mult) / 100;
