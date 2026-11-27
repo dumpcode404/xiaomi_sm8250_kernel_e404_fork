@@ -243,13 +243,23 @@ bad_bmap:
 	goto out;
 }
 
+/*
+ * Number of pages each kcompressd thread may have queued. 0 stops queueing
+ * new pages, so kswapd compresses them itself. The default is the full FIFO.
+ */
+int vm_kcompressd __read_mostly = KCOMPRESS_FIFO_SIZE;
+
 static bool swap_sched_async_compress(struct page *page)
 {
 	struct swap_info_struct *sis;
 	pg_data_t *pgdat = page_pgdat(page);
 	static atomic_t rr_cursor = ATOMIC_INIT(0);
-	unsigned int start_hid, i;
+	unsigned int start_hid, i, limit;
 	int hid;
+
+	limit = READ_ONCE(vm_kcompressd) * sizeof(page);
+	if (!limit)
+		return false;
 
 	if (!current_is_kswapd())
 		return false;
@@ -276,7 +286,8 @@ static bool swap_sched_async_compress(struct page *page)
 		if (unlikely(!pgdat->kcompressd[hid]))
 			continue;
 
-		if (kfifo_avail(&pgdat->kcompress_fifo[hid]) >= sizeof(page) &&
+		if (kfifo_len(&pgdat->kcompress_fifo[hid]) < limit &&
+		    kfifo_avail(&pgdat->kcompress_fifo[hid]) >= sizeof(page) &&
 		    kfifo_in(&pgdat->kcompress_fifo[hid], &page, sizeof(page))) {
 			wake_up_interruptible(&pgdat->kcompressd_wait[hid]);
 			return true;
