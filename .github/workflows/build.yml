@@ -92,7 +92,7 @@ jobs:
           # moved or rewritten later, the commit is fetched by its SHA.
           KSU_REPO=https://github.com/re-noroi/KernelSU
           KSU_BRANCH=xxksu-driver
-          KSU_SHA=037e828945e082ddab83a0266f1ed8315e4386fd
+          KSU_SHA=6f1d005aa96d3e612368837ce626f858a914b6eb
           git clone --single-branch --branch "$KSU_BRANCH" "$KSU_REPO" KernelSU
           if ! git -C KernelSU cat-file -e "${KSU_SHA}^{commit}" 2>/dev/null; then
             git -C KernelSU fetch origin "$KSU_SHA"
