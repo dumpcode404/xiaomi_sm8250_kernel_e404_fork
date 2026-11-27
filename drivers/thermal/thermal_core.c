@@ -69,7 +69,13 @@ struct screen_monitor sm;
 #endif
 
 static struct device thermal_message_dev;
-atomic_t switch_mode = ATOMIC_INIT(0);
+/*
+ * sconfig tells the userspace thermal daemon which profile to use. Profile 0
+ * is never reported: it is replaced by the game profile, both at boot and
+ * when userspace writes it.
+ */
+#define THERMAL_SCONFIG_GAME	9
+atomic_t switch_mode = ATOMIC_INIT(THERMAL_SCONFIG_GAME);
 static atomic_t temp_state = ATOMIC_INIT(0);
 static atomic_t balance_mode = ATOMIC_INIT(0);
 static atomic_t board_sensor_temp_comp_default = ATOMIC_INIT(0);
@@ -1734,14 +1740,17 @@ static ssize_t
 thermal_sconfig_store(struct device *dev,
 				      struct device_attribute *attr, const char *buf, size_t len)
 {
-	int ret, val = -1;
+	int ret, val;
 
 	ret = kstrtoint(buf, 10, &val);
+	if (ret)
+		return ret;
+
+	if (!val)
+		val = THERMAL_SCONFIG_GAME;
 
 	atomic_set(&switch_mode, val);
 
-	if (ret)
-		return ret;
 	return len;
 }
 
