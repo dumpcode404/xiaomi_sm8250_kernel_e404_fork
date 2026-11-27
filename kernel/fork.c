@@ -991,8 +991,12 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	 * Gap tracking must be enabled: without MT_FLAGS_ALLOC_RANGE,
 	 * mas_update_gap() is a no-op (mt_is_alloc() false) and every
 	 * gap search on a populated tree fails with -ENOMEM.
+	 * LOCK_EXTERN: mm_mt is serialized by mmap_sem, the internal
+	 * ma_lock is never taken. This keeps mas_nomem() from
+	 * unlocking/locking a lock it does not hold after GFP_NOWAIT
+	 * fails inside mas_erase() and friends.
 	 */
-	mt_init_flags(&mm->mm_mt, MT_FLAGS_ALLOC_RANGE);
+	mt_init_flags(&mm->mm_mt, MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN);
 #endif
 	mm->vmacache_seqnum = 0;
 	atomic_set(&mm->mm_users, 1);

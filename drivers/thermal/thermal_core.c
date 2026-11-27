@@ -1810,14 +1810,14 @@ static ssize_t
 thermal_temp_state_store(struct device *dev,
 				      struct device_attribute *attr, const char *buf, size_t len)
 {
-	int ret, val = -1;
+	int ret, val;
 
 	ret = kstrtoint(buf, 10, &val);
+	if (ret)
+		return ret;
 
 	atomic_set(&temp_state, val);
 
-	if (ret)
-		return ret;
 	return len;
 }
 

@@ -2898,8 +2898,10 @@ void exit_mmap(struct mm_struct *mm)
 #ifdef CONFIG_MAPLE_TREE
 	/* Drop the dual-maintained tree with the mm. All entries were
 	 * already unlinked above; this frees any remaining maple nodes
-	 * back to the maple_node_cache slab. */
-	mtree_destroy(&mm->mm_mt);
+	 * back to the maple_node_cache slab. No lock is held here and,
+	 * with MT_FLAGS_LOCK_EXTERN, the internal ma_lock is not used,
+	 * so use the lockless variant (matches v6.1 __mt_destroy()). */
+	__mt_destroy(&mm->mm_mt);
 #endif
 	vm_unacct_memory(nr_accounted);
 }
