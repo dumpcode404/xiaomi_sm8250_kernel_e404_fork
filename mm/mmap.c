@@ -540,6 +540,7 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	struct file *file = vma->vm_file;
 	long adjust_next = 0;
 	int remove_next = 0;
+	gfp_t gfp = GFP_KERNEL;
 	/* Dual-maintain mm_mt through in-place boundary changes. The
 	 * preallocated states below are consumed by the restore stores;
 	 * preallocation happens before any mutation so ENOMEM unwinds
@@ -633,6 +634,28 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 		}
 	}
 again:
+	/*
+	 * Preallocate maple nodes before taking i_mmap_rwsem or the
+	 * anon_vma lock and before linking @insert into the file's
+	 * interval tree, so that ENOMEM returns with nothing locked and
+	 * nothing linked (the v6.1 __vma_adjust() ordering). The second
+	 * pass of case 6 runs after the first one has been committed and
+	 * cannot be unwound, so it uses __GFP_NOFAIL.
+	 */
+	if (mas_preallocate(&mas, vma, gfp))
+		return -ENOMEM;
+	if (insert && mas_preallocate(&mas_insert, insert, gfp)) {
+		mas_destroy(&mas);
+		return -ENOMEM;
+	}
+	if (adjust_next && !remove_next &&
+	    mas_preallocate(&mas_next, next, gfp)) {
+		mas_destroy(&mas);
+		if (insert)
+			mas_destroy(&mas_insert);
+		return -ENOMEM;
+	}
+
 	vma_adjust_trans_huge(orig_vma, start, end, adjust_next);
 
 	if (file) {
@@ -665,25 +688,6 @@ again:
 		anon_vma_interval_tree_pre_update_vma(vma);
 		if (adjust_next)
 			anon_vma_interval_tree_pre_update_vma(next);
-	}
-
-	/*
-	 * Preallocate maple nodes before touching either tree: on
-	 * ENOMEM nothing has been mutated yet, so the caller can
-	 * unwind cleanly (this mirrors the vma_link() ordering).
-	 */
-	if (mas_preallocate(&mas, vma, GFP_KERNEL))
-		return -ENOMEM;
-	if (insert && mas_preallocate(&mas_insert, insert, GFP_KERNEL)) {
-		mas_destroy(&mas);
-		return -ENOMEM;
-	}
-	if (adjust_next && !remove_next &&
-	    mas_preallocate(&mas_next, next, GFP_KERNEL)) {
-		mas_destroy(&mas);
-		if (insert)
-			mas_destroy(&mas_insert);
-		return -ENOMEM;
 	}
 
 	if (root) {
@@ -827,6 +831,7 @@ again:
 		if (remove_next == 2) {
 			remove_next = 1;
 			end = next->vm_end;
+			gfp |= __GFP_NOFAIL;
 			goto again;
 		}
 		else if (!next) {
