@@ -856,8 +856,17 @@ void wq_worker_running(struct task_struct *task)
 
 	if (!worker->sleeping)
 		return;
+
+	/*
+	 * If preempted by unbind_workers() between the WORKER_NOT_RUNNING check
+	 * and the nr_running increment below, we may ruin the nr_running reset
+	 * and leave with an unexpected pool->nr_running == 1 on the newly unbound
+	 * pool. Protect against such race.
+	 */
+	preempt_disable();
 	if (!(worker->flags & WORKER_NOT_RUNNING))
 		atomic_inc(&worker->pool->nr_running);
+	preempt_enable();
 	worker->sleeping = 0;
 }
 
@@ -866,7 +875,8 @@ void wq_worker_running(struct task_struct *task)
  * @task: task going to sleep
  *
  * This function is called from schedule() when a busy worker is
- * going to sleep.
+ * going to sleep. Preemption needs to be disabled to protect ->sleeping
+ * assignment.
  */
 void wq_worker_sleeping(struct task_struct *task)
 {
@@ -883,7 +893,8 @@ void wq_worker_sleeping(struct task_struct *task)
 
 	pool = worker->pool;
 
-	if (WARN_ON_ONCE(worker->sleeping))
+	/* Return if preempted before wq_worker_running() was reached */
+	if (worker->sleeping)
 		return;
 
 	worker->sleeping = 1;
@@ -1416,8 +1427,17 @@ static void __queue_work(int cpu, struct workqueue_struct *wq,
 
 	/* if draining, only works from the same workqueue are allowed */
 	if (unlikely(wq->flags & __WQ_DRAINING) &&
-	    WARN_ON_ONCE(!is_chained_work(wq)))
+	    WARN_ON_ONCE(!is_chained_work(wq))) {
+		/*
+		 * State on entry: PENDING is set, work is off-queue (no
+		 * insert_work() has run).
+		 *
+		 * Returning without clearing PENDING would leave the work
+		 * in a weird state (PENDING=1, PWQ=0, entry empty)
+		 */
+		set_work_pool_and_clear_pending(work, get_work_pool_id(work));
 		return;
+	}
 retry:
 	/* pwq which will be used unless @work is executing elsewhere */
 	if (wq->flags & WQ_UNBOUND) {
@@ -1563,6 +1583,7 @@ static void __queue_delayed_work(int cpu, struct workqueue_struct *wq,
 		return;
 	}
 
+	WARN_ON_ONCE(cpu != WORK_CPU_UNBOUND && !cpu_online(cpu));
 	dwork->wq = wq;
 	dwork->cpu = cpu;
 	timer->expires = jiffies + delay;
@@ -1579,6 +1600,12 @@ static void __queue_delayed_work(int cpu, struct workqueue_struct *wq,
  * @wq: workqueue to use
  * @dwork: work to queue
  * @delay: number of jiffies to wait before queueing
+ *
+ * We queue the delayed_work to a specific CPU, for non-zero delays the
+ * caller must ensure it is online and can't go away. Callers that fail
+ * to ensure this, may get @dwork->timer queued to an offlined CPU and
+ * this will prevent queueing of @dwork->work unless the offlined CPU
+ * becomes online again.
  *
  * Return: %false if @work was already on a queue, %true otherwise.  If
  * @delay is zero and @dwork is idle, it will be scheduled for immediate
