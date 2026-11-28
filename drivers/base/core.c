@@ -8,6 +8,7 @@
  * Copyright (c) 2006 Novell, Inc.
  */
 
+#include <linux/cpu.h>
 #include <linux/cpufreq.h>
 #include <linux/device.h>
 #include <linux/err.h>
@@ -1721,6 +1722,16 @@ static ssize_t online_store(struct device *dev, struct device_attribute *attr,
 {
 	bool val;
 	int ret;
+
+	/*
+	 * Userspace CPU hotplug can leave the prime cluster stuck in its
+	 * online callbacks under thermal load, which freezes every fork and
+	 * exit behind cpu_hotplug_lock. Keep CPUs under kernel control;
+	 * suspend (freeze_secondary_cpus()) and in-kernel callers do not
+	 * go through this store and are not affected.
+	 */
+	if (dev->bus == &cpu_subsys)
+		return -EPERM;
 
 	ret = strtobool(buf, &val);
 	if (ret < 0)
