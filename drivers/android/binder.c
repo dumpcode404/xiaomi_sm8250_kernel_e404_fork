@@ -2549,6 +2549,7 @@ static int binder_proc_transaction(struct binder_transaction *t,
 	bool pending_async = false;
 	bool skip = false;
 	struct binder_transaction *t_outdated = NULL;
+	bool frozen = false;
 
 	BUG_ON(!node);
 	binder_node_lock(node);
@@ -2561,14 +2562,15 @@ static int binder_proc_transaction(struct binder_transaction *t,
 	}
 	binder_inner_proc_lock(proc);
 	if (proc->is_frozen) {
+		frozen = true;
 		proc->sync_recv |= !oneway;
 		proc->async_recv |= oneway;
 	}
-	if ((proc->is_frozen && !oneway) || proc->is_dead ||
+	if ((frozen && !oneway) || proc->is_dead ||
 			(thread && thread->is_dead)) {
 		binder_inner_proc_unlock(proc);
 		binder_node_unlock(node);
-		return proc->is_frozen ? BR_FROZEN_REPLY : BR_DEAD_REPLY;
+		return frozen ? BR_FROZEN_REPLY : BR_DEAD_REPLY;
 	}
 	if (!thread && !pending_async && !skip)
 		thread = binder_select_thread_ilocked(proc);
@@ -2578,7 +2580,7 @@ static int binder_proc_transaction(struct binder_transaction *t,
 	} else if (!pending_async) {
 		binder_enqueue_work_ilocked(&t->work, &proc->todo);
 	} else {
-		if ((t->flags & TF_UPDATE_TXN) && proc->is_frozen) {
+		if ((t->flags & TF_UPDATE_TXN) && frozen) {
 			t_outdated = binder_find_outdated_transaction_ilocked(t,
 									      &node->async_todo);
 			if (t_outdated) {
