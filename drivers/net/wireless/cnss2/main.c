@@ -2488,27 +2488,29 @@ static void cnss_event_work_deinit(struct cnss_plat_data *plat_priv)
 	destroy_workqueue(plat_priv->event_wq);
 	plat_priv->event_wq = NULL;
 
-	/* Drain queued-but-unrun events to avoid slab leak on remove/SSR.
-	 * Each post did pm_stay_awake, balance it here. Running work already
-	 * finished (destroy_workqueue waits), so list is stable, still take
-	 * lock for safety. Process context only. */
+	/* Drain queued-but-unrun events to avoid slab leak on remove.
+	 * Running work already finished (destroy_workqueue waits), so the
+	 * list is stable, still take the lock for safety. Process context
+	 * only. cnss_driver_event_post() balances its own pm_stay_awake(),
+	 * so nothing is relaxed here.
+	 *
+	 * A sync event is owned by its waiting poster, which frees it, and
+	 * its data belongs to the poster (REGISTER_DRIVER passes the static
+	 * driver_ops): complete it with an error instead of freeing.
+	 * Async events and their kzalloc'ed data are owned by the list.
+	 */
 	spin_lock_irqsave(&plat_priv->event_lock, flags);
 	list_for_each_entry_safe(event, tmp, &plat_priv->event_list, list) {
 		list_del(&event->list);
+		if (event->sync) {
+			event->ret = -ENODEV;
+			complete(&event->complete);
+			continue;
+		}
 		kfree(event->data);
 		kfree(event);
-		/* balance cnss_driver_event_post pm_stay_awake */
-		cnss_pm_relax(plat_priv);
 	}
 	spin_unlock_irqrestore(&plat_priv->event_lock, flags);
-
-	if (WARN_ON(atomic_read(&plat_priv->pm_count) != 0)) {
-		/* Force balance to avoid stuck wakeup blocking suspend.
-		 * Work already joined, count should be zero. */
-		while (atomic_read(&plat_priv->pm_count) > 0)
-			cnss_pm_relax(plat_priv);
-		atomic_set(&plat_priv->pm_count, 0);
-	}
 }
 
 static int cnss_reboot_notifier(struct notifier_block *nb,

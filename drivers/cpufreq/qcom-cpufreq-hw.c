@@ -517,9 +517,19 @@ static int qcom_cpufreq_hw_cpu_online(struct cpufreq_policy *policy)
 	 * The line will have been masked either by the offline path or by
 	 * an ISR that fired before the cluster shut down. Re-enable
 	 * conditionally to keep the disable/enable refcount balanced.
+	 *
+	 * Mark it enabled first, under dcvsh_lock like the poll path does:
+	 * dcvsh_handle_isr() only masks the line and starts polling while
+	 * is_irq_enabled is set. If the ISR masked the line before offline,
+	 * is_irq_enabled is still false, and with the LMh limit asserted the
+	 * level-triggered line would fire again on every unmask.
 	 */
-	if (irqd_irq_disabled(irq_get_irq_data(c->dcvsh_irq)))
+	mutex_lock(&c->dcvsh_lock);
+	if (irqd_irq_disabled(irq_get_irq_data(c->dcvsh_irq))) {
+		c->is_irq_enabled = true;
 		enable_irq(c->dcvsh_irq);
+	}
+	mutex_unlock(&c->dcvsh_lock);
 
 	return 0;
 }
