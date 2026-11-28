@@ -1427,8 +1427,17 @@ static void __queue_work(int cpu, struct workqueue_struct *wq,
 
 	/* if draining, only works from the same workqueue are allowed */
 	if (unlikely(wq->flags & __WQ_DRAINING) &&
-	    WARN_ON_ONCE(!is_chained_work(wq)))
+	    WARN_ON_ONCE(!is_chained_work(wq))) {
+		/*
+		 * State on entry: PENDING is set, work is off-queue (no
+		 * insert_work() has run).
+		 *
+		 * Returning without clearing PENDING would leave the work
+		 * in a weird state (PENDING=1, PWQ=0, entry empty)
+		 */
+		set_work_pool_and_clear_pending(work, get_work_pool_id(work));
 		return;
+	}
 retry:
 	/* pwq which will be used unless @work is executing elsewhere */
 	if (wq->flags & WQ_UNBOUND) {
